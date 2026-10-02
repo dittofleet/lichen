@@ -32,12 +32,26 @@ lichen sync ~/.zshrc ~/.claude/CLAUDE.md
 ```
 
 Deletions sync too: delete a synced file on one machine and every other
-machine deletes its copy (moved into `~/lichen-backups/` first, never
-destroyed). A file deleted by mistake can be brought back from the sync
-repo's git history, on all machines at once:
+machine deletes its copy. A file deleted by mistake can be brought back
+from the sync repo's git history, on all machines at once:
 
 ```sh
 lichen sync recover ~/.zshrc
+```
+
+### Backups
+
+Off by default. When a machine already has its own version of a file
+that starts syncing (a fresh machine joining, or a path first synced
+from another machine), the synced version replaces it and the local one
+is gone. A directory in the way is the exception: it may hold files
+that were never synced, so it is always moved to `~/lichen-backups/`.
+To keep replaced and deleted files there as well, set `backups` in
+`~/.config/lichen/config.json` (it syncs, so this turns backups on for
+every machine):
+
+```json
+{ "topic_prefix": "...", "backups": true }
 ```
 
 ## Skills
