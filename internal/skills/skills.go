@@ -3,7 +3,9 @@
 // from public git repos and keeps them fresh by polling upstream. The
 // canonical copy of a skill lives in ~/.agents/skills/<name>, and each
 // configured harness sees it through a symlink (default: Claude Code's
-// ~/.claude/skills/<name>), matching the skills CLI's own layout. WHICH
+// ~/.claude/skills/<name>), matching the skills CLI's own layout. A skill
+// limited to some harnesses (metadata.lichen-harnesses) lives in lichen's
+// private store instead, since some harnesses read ~/.agents/skills. WHICH
 // repos to sync and which harnesses to link live in this module's own
 // config file (~/.config/lichen/skills.json), which the files module
 // carries to every machine. Clones and install bookkeeping stay
@@ -178,9 +180,19 @@ type manifest struct {
 }
 
 type skillState struct {
-	Repo  string   `json:"repo"`            // canonical "host/owner/repo" key
-	Tree  string   `json:"tree"`            // git tree hash of the installed skill dir
-	Links []string `json:"links,omitempty"` // harness symlinks lichen maintains
+	Repo    string   `json:"repo"`               // canonical "host/owner/repo" key
+	Tree    string   `json:"tree"`               // git tree hash of the installed skill dir
+	Links   []string `json:"links,omitempty"`    // harness symlinks lichen maintains
+	Dir     string   `json:"dir,omitempty"`      // the canonical copy (older manifests: ~/.agents/skills/<name>)
+	OnlyFor []string `json:"only_for,omitempty"` // lichen-harnesses at install, empty for all
+}
+
+// canonical is where this skill's canonical copy was installed.
+func (st *skillState) canonical(agents, name string) string {
+	if st.Dir != "" {
+		return st.Dir
+	}
+	return filepath.Join(agents, name)
 }
 
 func manifestPath() (string, error) {
@@ -189,6 +201,16 @@ func manifestPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(d, "skills-manifest.json"), nil
+}
+
+// PrivateDir holds the canonical copies of skills limited to some
+// harnesses, reachable only through those harnesses' links.
+func PrivateDir() (string, error) {
+	d, err := config.DataDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(d, "skills"), nil
 }
 
 func clonesRoot() (string, error) {
@@ -285,23 +307,65 @@ func sanitizeName(s string) string {
 	return strings.Trim(b.String(), ".-")
 }
 
-// frontmatterName pulls the name out of SKILL.md's YAML frontmatter
-// ("" when absent). A full YAML parser is overkill for one flat key.
-func frontmatterName(md []byte) string {
+// skillMeta is what lichen reads from SKILL.md's YAML frontmatter.
+// OnlyFor empty means every configured harness.
+type skillMeta struct {
+	name    string
+	onlyFor []string
+}
+
+// parseFrontmatter pulls the name and metadata.lichen-harnesses out of
+// SKILL.md's YAML frontmatter. A full YAML parser is overkill for two
+// keys. The spec's metadata map only holds strings, so the harnesses are
+// one comma-separated value: "lichen-harnesses: claude, codex".
+func parseFrontmatter(md []byte) skillMeta {
+	var meta skillMeta
 	lines := strings.Split(string(md), "\n")
 	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
-		return ""
+		return meta
 	}
+	section := "" // the top-level key an indented line belongs to
 	for _, line := range lines[1:] {
 		t := strings.TrimSpace(line)
 		if t == "---" {
-			return ""
+			break
 		}
-		if after, ok := strings.CutPrefix(t, "name:"); ok {
-			return strings.Trim(strings.TrimSpace(after), `"'`)
+		key, val, ok := strings.Cut(t, ":")
+		if !ok {
+			continue
+		}
+		val, _, _ = strings.Cut(val, " #") // a trailing YAML comment
+		key, val = strings.TrimSpace(key), strings.Trim(strings.TrimSpace(val), `"'`)
+		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+			section = key
+			if key == "name" {
+				meta.name = val
+			}
+		} else if section == "metadata" && key == "lichen-harnesses" {
+			for _, h := range strings.Split(val, ",") {
+				if h = sanitizeName(h); h != "" {
+					meta.onlyFor = append(meta.onlyFor, h)
+				}
+			}
 		}
 	}
-	return ""
+	slices.Sort(meta.onlyFor)
+	meta.onlyFor = slices.Compact(meta.onlyFor)
+	return meta
+}
+
+// harnessName names a harness link dir for lichen-harnesses: the
+// directory holding its skills dir, minus the leading dot, so
+// ~/.claude/skills is "claude", ~/.codex/skills is "codex" and
+// ~/.config/opencode/skills is "opencode".
+func harnessName(dir string) string {
+	return sanitizeName(filepath.Base(filepath.Dir(dir)))
+}
+
+// discovered is one skill found in a clone.
+type discovered struct {
+	dir     string   // relative to the clone root
+	onlyFor []string // from lichen-harnesses
 }
 
 // discover walks a clone for skill directories: any directory at most
@@ -309,9 +373,9 @@ func frontmatterName(md []byte) string {
 // skills CLI uses (a single-skill repo root, skills/<name>,
 // .claude/skills/<name>, skills/<category>/<name>). A skill's own
 // subtree is not searched further, so a shallow skill shadows nested
-// duplicates. Returns skill name → dir relative to root.
-func discover(root, repo string) map[string]string {
-	found := map[string]string{}
+// duplicates. Returns skill name → where it is.
+func discover(root, repo string) map[string]discovered {
+	found := map[string]discovered{}
 	var walk func(dir string, depth int)
 	walk = func(dir string, depth int) {
 		if md, err := os.ReadFile(filepath.Join(root, dir, "SKILL.md")); err == nil {
@@ -319,12 +383,13 @@ func discover(root, repo string) map[string]string {
 			if dir == "." {
 				fallback = repo
 			}
-			name := frontmatterName(md)
-			if name = sanitizeName(name); name == "" {
+			meta := parseFrontmatter(md)
+			name := sanitizeName(meta.name)
+			if name == "" {
 				name = sanitizeName(fallback)
 			}
-			if name != "" && found[name] == "" {
-				found[name] = dir
+			if _, dup := found[name]; name != "" && !dup {
+				found[name] = discovered{dir: dir, onlyFor: meta.onlyFor}
 			}
 			return
 		}
@@ -539,28 +604,34 @@ func syncLinks(name, canonical string, prev, dirs []string, lg *log.Logger) []st
 	return links
 }
 
-// uninstall removes a manifest-owned skill: its harness symlinks first
-// (only those that still resolve to our copy), then the canonical copy.
-func uninstall(name string, links []string, lg *log.Logger) {
-	agents, err := agentsSkillsDir()
-	if err != nil {
-		return
+// linkDirs narrows the configured harness dirs to the ones a skill's
+// lichen-harnesses names (all of them when it names none).
+func linkDirs(dirs, onlyFor []string) []string {
+	if len(onlyFor) == 0 {
+		return dirs
 	}
-	canonical := filepath.Join(agents, name)
+	return slices.DeleteFunc(slices.Clone(dirs), func(d string) bool {
+		return !slices.Contains(onlyFor, harnessName(d))
+	})
+}
+
+// uninstall removes a manifest-owned skill's canonical copy and, first,
+// its harness symlinks (only those that still resolve to that copy).
+func uninstall(canonical string, links []string) {
 	for _, link := range links {
 		if linksTo(link, canonical) {
 			os.Remove(link)
 		}
 	}
 	os.RemoveAll(canonical)
-	lg.Printf("skills: removed %s", name)
 }
 
 // target is one skill the config wants installed.
 type target struct {
-	repo string // canonical repo key
-	dir  string // absolute skill dir inside the clone
-	tree string // tree hash of the skill dir
+	repo    string   // canonical repo key
+	dir     string   // absolute skill dir inside the clone
+	tree    string   // tree hash of the skill dir
+	onlyFor []string // lichen-harnesses, empty for all
 }
 
 // Reconcile makes the installed skills match the skills config: clone or
@@ -657,7 +728,7 @@ func run(lg *log.Logger, force bool) error {
 		found := discover(dir, repoName(key))
 		if !sel.all {
 			for name := range sel.only {
-				if found[name] == "" {
+				if _, ok := found[name]; !ok {
 					lg.Printf("skills: %s has no skill %q", key, name)
 				}
 			}
@@ -676,7 +747,7 @@ func run(lg *log.Logger, force bool) error {
 				lg.Printf("skills: %s also provides %q (keeping the copy from %s)", key, name, prev.repo)
 				continue
 			}
-			tree, err := treeHash(dir, found[name])
+			tree, err := treeHash(dir, found[name].dir)
 			if err != nil {
 				// Failing to hash must not read as "the skill vanished":
 				// protect the whole repo's installs from removal.
@@ -684,7 +755,7 @@ func run(lg *log.Logger, force bool) error {
 				lg.Printf("skills: %s: %v", key, err)
 				continue
 			}
-			desired[name] = target{repo: key, dir: filepath.Join(dir, found[name]), tree: tree}
+			desired[name] = target{repo: key, dir: filepath.Join(dir, found[name].dir), tree: tree, onlyFor: found[name].onlyFor}
 		}
 	}
 
@@ -692,28 +763,50 @@ func run(lg *log.Logger, force bool) error {
 	if err != nil {
 		return err
 	}
+	private, err := PrivateDir()
+	if err != nil {
+		return err
+	}
+	// ~/.agents/skills holds canonical copies, so it never gets links.
+	linkable := slices.DeleteFunc(slices.Clone(harnesses), func(d string) bool { return d == agents })
 	for _, name := range slices.Sorted(maps.Keys(desired)) {
 		t := desired[name]
-		canonical := filepath.Join(agents, name)
+		// Some harnesses (Codex among them) read ~/.agents/skills directly,
+		// so a skill limited to others would still reach them there.
+		store := agents
+		if len(t.onlyFor) > 0 && !slices.Contains(t.onlyFor, harnessName(agents)) {
+			store = private
+		}
+		canonical := filepath.Join(store, name)
 		st := man.Skills[name]
+		// A changed lichen-harnesses can move the skill between stores.
+		owned := st != nil && st.canonical(agents, name) == canonical
 		_, statErr := os.Lstat(canonical)
-		if st == nil && statErr == nil {
+		// Nothing but lichen writes its private store, so only the shared
+		// one can hold another tool's copy.
+		if !owned && statErr == nil && store == agents {
 			lg.Printf("skills: NOT installing %s (already at %s via another tool; remove it to let lichen manage it)", name, config.ContractHome(canonical))
 			continue
 		}
-		if st == nil || st.Tree != t.tree || st.Repo != t.repo || statErr != nil {
-			if err := os.MkdirAll(agents, 0o755); err != nil {
+		// A move drops the old links, and only syncLinks can lay new ones.
+		if !owned && st != nil && len(harnesses) == 0 {
+			continue
+		}
+		if !owned || st.Tree != t.tree || st.Repo != t.repo || statErr != nil {
+			if err := os.MkdirAll(store, 0o755); err != nil {
 				return err
 			}
 			if err := copyDir(t.dir, canonical); err != nil {
 				lg.Printf("skills: installing %s: %v", name, err)
 				continue
 			}
-			var prevLinks []string
-			if st != nil {
-				prevLinks = st.Links
+			var links []string
+			if owned {
+				links = st.Links
+			} else if st != nil {
+				uninstall(st.canonical(agents, name), st.Links)
 			}
-			st = &skillState{Repo: t.repo, Tree: t.tree, Links: prevLinks}
+			st = &skillState{Repo: t.repo, Tree: t.tree, Links: links, Dir: canonical, OnlyFor: t.onlyFor}
 			man.Skills[name] = st
 			// Persist each install as it lands: a pass killed between
 			// copy and a single final save would leave the directory on
@@ -722,10 +815,17 @@ func run(lg *log.Logger, force bool) error {
 			if err := man.save(); err != nil {
 				return err
 			}
-			lg.Printf("skills: installed %s@%.8s from %s", name, t.tree, t.repo)
+			only := ""
+			if len(t.onlyFor) > 0 {
+				only = " (" + strings.Join(t.onlyFor, ", ") + " only)"
+				if len(linkDirs(linkable, t.onlyFor)) == 0 {
+					only += ", but no configured harness matches"
+				}
+			}
+			lg.Printf("skills: installed %s@%.8s from %s%s", name, t.tree, t.repo, only)
 		}
 		if len(harnesses) > 0 {
-			st.Links = syncLinks(name, canonical, st.Links, harnesses, lg)
+			st.Links = syncLinks(name, canonical, st.Links, linkDirs(linkable, t.onlyFor), lg)
 		}
 	}
 
@@ -739,7 +839,8 @@ func run(lg *log.Logger, force bool) error {
 			if failed[man.Skills[name].Repo] {
 				continue
 			}
-			uninstall(name, man.Skills[name].Links, lg)
+			uninstall(man.Skills[name].canonical(agents, name), man.Skills[name].Links)
+			lg.Printf("skills: removed %s", name)
 			delete(man.Skills, name)
 		}
 		for _, key := range slices.Sorted(maps.Keys(man.Repos)) {
@@ -861,8 +962,9 @@ func RemoveSources(args []string) error {
 
 // Skill is one installed, lichen-managed skill.
 type Skill struct {
-	Name string
-	Repo string
+	Name    string
+	Repo    string
+	OnlyFor []string // the only harnesses it is for, empty for all
 }
 
 // Installed lists the skills this machine's manifest owns, sorted by name.
@@ -873,7 +975,7 @@ func Installed() ([]Skill, error) {
 	}
 	var out []Skill
 	for _, name := range slices.Sorted(maps.Keys(man.Skills)) {
-		out = append(out, Skill{Name: name, Repo: man.Skills[name].Repo})
+		out = append(out, Skill{Name: name, Repo: man.Skills[name].Repo, OnlyFor: man.Skills[name].OnlyFor})
 	}
 	return out, nil
 }
