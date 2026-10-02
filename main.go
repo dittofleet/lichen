@@ -402,7 +402,11 @@ func cmdSkillsList() error {
 	fromRepo := map[string]bool{}
 	for _, s := range installed {
 		fromRepo[s.Repo] = true
-		fmt.Printf("%-*s  %s\n", width, s.Name, dim(s.Repo))
+		repo := s.Repo
+		if len(s.OnlyFor) > 0 {
+			repo += " (" + strings.Join(s.OnlyFor, ", ") + " only)"
+		}
+		fmt.Printf("%-*s  %s\n", width, s.Name, dim(repo))
 	}
 	// A source with nothing installed yet: a fresh machine before its
 	// first pass, or a repo that failed to clone.
@@ -650,7 +654,19 @@ func cmdUninstall(args []string) error {
 		rm(filepath.Dir(p), "config (~/.config/lichen)")
 	}
 	if d, err := config.DataDir(); err == nil {
-		rm(d, "local state (~/.local/share/lichen)")
+		// Harness-limited skills live in there and stay installed, like
+		// the ones in ~/.agents/skills: the rest is lichen's own state.
+		keep, _ := skills.PrivateDir()
+		entries, _ := os.ReadDir(d)
+		for _, e := range entries {
+			if p := filepath.Join(d, e.Name()); p != keep {
+				os.RemoveAll(p)
+			}
+		}
+		os.Remove(d) // fails, as it should, when skills were kept
+		if len(entries) > 0 {
+			removed = append(removed, "local state (~/.local/share/lichen)")
+		}
 	}
 	// The chezmoi source and state, so a later install can initialize a
 	// different sync repo cleanly. The applied files in $HOME are not here,

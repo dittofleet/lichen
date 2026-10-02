@@ -75,6 +75,25 @@ get links too by listing their skill directories in the skills config:
 { "harnesses": ["~/.claude/skills", "~/.codex/skills"] }
 ```
 
+A skill can limit itself to some harnesses with a comma-separated
+`lichen-harnesses` under `metadata` in its `SKILL.md` frontmatter. A
+harness is named after the directory holding its skills dir, so
+`~/.claude/skills` is `claude` and `~/.codex/skills` is `codex`:
+
+```yaml
+---
+name: my-skill
+description: ...
+metadata:
+  lichen-harnesses: claude, codex
+---
+```
+
+Some harnesses (Codex among them) read `~/.agents/skills` directly, so a
+limited skill's canonical copy lives in `~/.local/share/lichen/skills`
+instead, reachable only through the listed harnesses' links. List
+`agents` to keep it in `~/.agents/skills`.
+
 The list of skill repos lives in its own synced config file
 (`~/.config/lichen/skills.json`), so adding a skill on one machine
 installs it everywhere, and removing one uninstalls it everywhere. The
