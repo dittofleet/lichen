@@ -275,6 +275,33 @@ func TestRunOnlyFor(t *testing.T) {
 		t.Error("codex link to the private copy missing")
 	}
 
+	// Growing the list within the private store adds the new harness's link.
+	skill("only", "metadata:\n  lichen-harnesses: codex, claude\n")
+	git(upstream, "commit", "-qam", "grow")
+	pass()
+	for _, d := range []string{claude, codex} {
+		if !linksTo(filepath.Join(d, "only"), filepath.Join(private, "only")) {
+			t.Errorf("%s link to the private copy missing", d)
+		}
+	}
+
+	// Shrinking it removes the dropped harness's link and keeps the rest.
+	skill("only", "metadata:\n  lichen-harnesses: claude\n")
+	git(upstream, "commit", "-qam", "shrink")
+	pass()
+	expect(filepath.Join(codex, "only"), false)
+	if !linksTo(filepath.Join(claude, "only"), filepath.Join(private, "only")) {
+		t.Error("claude link to the private copy missing")
+	}
+
+	// Naming only harnesses this machine lacks leaves it linked nowhere.
+	skill("only", "metadata:\n  lichen-harnesses: cursor\n")
+	git(upstream, "commit", "-qam", "elsewhere")
+	pass()
+	expect(filepath.Join(claude, "only"), false)
+	expect(filepath.Join(codex, "only"), false)
+	expect(filepath.Join(agents, "only"), false)
+
 	// Removal cleans up the private copy and its link.
 	writeConfig(`{"sources":[{"repo":"me/skills","except":["only"]}],"harnesses":["~/.claude/skills","~/.codex/skills"]}`)
 	pass()
