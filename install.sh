@@ -99,17 +99,10 @@ if [ -n "$MANAGED" ] && [ "$HAS_CONFIG" = 0 ]; then
   exit 1
 fi
 
-# Materialize the config first (everything else needs it). A pre-existing
-# local config is backed up, the sync repo's copy wins.
+# Materialize the config first (everything else needs it). The sync
+# repo's copy wins over a pre-existing local one.
 if [ "$HAS_CONFIG" = 1 ]; then
   mkdir -p "$(dirname "$CONFIG_FILE")"
-  if [ -f "$CONFIG_FILE" ]; then
-    # Mirrors the binary's backup policy (internal/backup): move, not
-    # copy, into ~/lichen-backups/<timestamp>/<home-relative-path>.
-    BK="$HOME/lichen-backups/$(date +%Y-%m-%d-%H%M%S)/.config/lichen"
-    mkdir -p "$BK" && mv "$CONFIG_FILE" "$BK/config.json"
-    echo "Backed up existing config to $BK/config.json" >&2
-  fi
   chezmoi apply --force "$CONFIG_FILE"
   echo "Synced config applied" >&2
 fi
@@ -158,9 +151,10 @@ cat > "$PLIST" <<EOF
 </plist>
 EOF
 
-# First full pass in the terminal: synced files applied, with pre-existing
-# local files backed up to ~/lichen-backups, all before the daemon takes
-# over. The old daemon was already booted out above, so this runs unopposed.
+# First full pass in the terminal: synced files applied over pre-existing
+# local ones (kept in ~/lichen-backups if backups are on), all before the
+# daemon takes over. The old daemon was already booted out above, so this
+# runs unopposed.
 "$DEST/lichen" sync || true
 
 launchctl bootstrap "$GUI_DOMAIN" "$PLIST"

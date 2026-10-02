@@ -9,10 +9,11 @@
 // re-deleted. And chezmoi's entry state gates the sending side: a
 // managed path only propagates as a deletion if chezmoi actually wrote
 // it here once, so a path that merely FAILED to materialize (a foreign
-// file moved to backups, an apply that errored) is never bounced at the
-// fleet as a deletion. Content is never lost: the deleting machine's
-// copy survives in the sync repo's git history (`lichen sync recover` brings
-// it back), every other machine moves its copy into its backups dir.
+// file discarded, an apply that errored) is never bounced at the fleet
+// as a deletion. Content is never lost: the deleting machine's copy
+// survives in the sync repo's git history (`lichen sync recover` brings
+// it back), and every other machine discards its copy (moved into its
+// backups dir when backups are on).
 
 package files
 
@@ -177,8 +178,8 @@ func dropNested(paths []string) []string {
 // dropEntryStateUnder clears chezmoi's memory of having written anything
 // at or under the given paths (directories have entries of their own), so
 // a file the user recreates at one later counts as foreign (backed up
-// before any overwrite) instead of fair game, and so nothing lingering
-// there reads as a local deletion on a later pass. The caller supplies
+// before any overwrite when backups are on) instead of fair game, and so
+// nothing lingering there reads as a local deletion on a later pass. The caller supplies
 // the entry-state snapshot so one dump serves the whole batch (a
 // slightly stale snapshot only costs no-op deletes). Best-effort: a
 // stale entry only weakens that backup, it breaks nothing.
@@ -318,12 +319,12 @@ func handleMissing(cfg *config.Config, lg *log.Logger, prev []string, deleted []
 
 // applyIncomingDeletions carries out deletions other machines pushed:
 // every path that left the managed set since the last pass AND is on the
-// deletion log gets its local copy moved to backups. Departures without
+// deletion log gets its local copy discarded. Departures without
 // a log entry (an ignore rule, a hand-edit to the sync repo) keep their
 // local copy. The first pass on a machine only records the baseline.
 // Returns the previous pass's managed files (nil without a baseline) for
 // handleMissing.
-func applyIncomingDeletions(lg *log.Logger) ([]string, error) {
+func applyIncomingDeletions(cfg *config.Config, lg *log.Logger) ([]string, error) {
 	src, err := SourcePath()
 	if err != nil {
 		return nil, err
@@ -344,7 +345,7 @@ func applyIncomingDeletions(lg *log.Logger) ([]string, error) {
 		}
 	}
 	if len(departed) > 0 {
-		if err := deleteDeparted(src, departed, lg); err != nil {
+		if err := deleteDeparted(cfg, src, departed, lg); err != nil {
 			return nil, err
 		}
 	}
@@ -355,7 +356,7 @@ func applyIncomingDeletions(lg *log.Logger) ([]string, error) {
 	return prev, nil
 }
 
-func deleteDeparted(src string, departed []string, lg *log.Logger) error {
+func deleteDeparted(cfg *config.Config, src string, departed []string, lg *log.Logger) error {
 	dlog, err := loadDeletionLog(src)
 	if err != nil || len(dlog) == 0 {
 		return err
@@ -386,7 +387,7 @@ func deleteDeparted(src string, departed []string, lg *log.Logger) error {
 		if err != nil {
 			continue // already gone here
 		}
-		// For a directory, move only what lichen managed: files the user
+		// For a directory, discard only what lichen managed: files the user
 		// kept in it but never synced must stay (same rule as classify's
 		// foreign-dir handling). Emptied directories are then pruned.
 		victims := []string{abs}
@@ -402,12 +403,12 @@ func deleteDeparted(src string, departed []string, lg *log.Logger) error {
 			if _, err := os.Lstat(v); err != nil {
 				continue
 			}
-			to, err := backup.Move(v)
+			to, err := backup.Discard(v, cfg.Backups)
 			if err != nil {
 				lg.Printf("files: deleting %s: %v", v, err)
 				continue
 			}
-			lg.Printf("files: deleted %s (kept at %s, `lichen sync recover` re-syncs it)", v, to)
+			lg.Printf("files: deleted %s%s, `lichen sync recover` re-syncs it", v, keptAt(to))
 		}
 		if fi.IsDir() {
 			removeEmptyDirs(abs)
@@ -419,6 +420,14 @@ func deleteDeparted(src string, departed []string, lg *log.Logger) error {
 		}
 	}
 	return nil
+}
+
+// keptAt notes where backup.Discard kept a file, for log lines.
+func keptAt(to string) string {
+	if to == "" {
+		return ""
+	}
+	return " (kept at " + to + ")"
 }
 
 // removeEmptyDirs prunes now-empty directories under (and including)

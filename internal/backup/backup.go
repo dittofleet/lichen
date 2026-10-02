@@ -1,8 +1,12 @@
-// Package backup implements lichen's overwrite policy: the first time
-// lichen touches a file it didn't write, the old version is moved to
-// ~/lichen-backups/<timestamp>/<home-relative-path>. Deliberately visible
-// in the home directory (not Documents: that often syncs to iCloud, and
-// backed-up dotfiles can contain secrets). Nothing is ever auto-deleted.
+// Package backup implements lichen's overwrite policy. Backups are off
+// by default: a file lichen has to get out of the way (a pre-existing
+// local file it is about to apply over, a copy deleted on another
+// machine) is simply removed. With "backups": true in the config, the
+// old version is moved to
+// ~/lichen-backups/<timestamp>/<home-relative-path> instead. Deliberately
+// visible in the home directory (not Documents: that often syncs to
+// iCloud, and backed-up dotfiles can contain secrets). Backups are never
+// auto-deleted.
 package backup
 
 import (
@@ -41,17 +45,24 @@ func destPath(abs string) (string, error) {
 	return dst, os.MkdirAll(filepath.Dir(dst), 0o755)
 }
 
-// Move relocates abs (file or whole directory) into the backup area,
-// preserving its home-relative layout, and returns the new location.
-func Move(abs string) (string, error) {
+// Discard gets abs out of the way: moved into the backup area
+// (preserving its home-relative layout) when keep is set, removed
+// otherwise. A directory is always kept: lichen syncs files, so one in
+// the way holds files that exist nowhere else. Returns the backup
+// location, "" when removed.
+func Discard(abs string, keep bool) (string, error) {
+	fi, err := os.Lstat(abs)
+	if err != nil {
+		return "", err
+	}
+	if !keep && !fi.IsDir() {
+		return "", os.Remove(abs)
+	}
 	dst, err := destPath(abs)
 	if err != nil {
 		return "", err
 	}
-	if err := os.Rename(abs, dst); err != nil {
-		return "", err
-	}
-	return dst, nil
+	return dst, os.Rename(abs, dst)
 }
 
 // Copy snapshots abs into the backup area without moving it, for files

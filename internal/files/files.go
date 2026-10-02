@@ -43,7 +43,7 @@ func chezmoi(args ...string) (string, error) {
 // fail. The cross-process lock does not cover read commands, so this
 // retries a lock-timeout a few times: the contending call is always quick,
 // and this keeps an apply from failing after foreign files were already
-// moved to backups.
+// cleared out of the way.
 func chezmoiRaw(args ...string) (string, error) {
 	var out []byte
 	var err error
@@ -198,7 +198,7 @@ func underSymlink(home, abs string) bool {
 //	            (status col 1 is M/D). Capture with re-add, never revert.
 //	foreign:    a file exists that chezmoi never wrote (absent from its
 //	            entry state, i.e. a fresh machine's pre-existing dotfile).
-//	            Move to backups, then apply over it.
+//	            Discard (see internal/backup), then apply over it.
 //	remote:     destination is exactly what chezmoi last wrote. Apply.
 //	skipped:    a symlink sits at (or above) the path. Re-adding one
 //	            would capture and publish the link TARGET's content
@@ -227,13 +227,13 @@ func classify(home string, written, managedDirs map[string]bool) (localEdits, fo
 		}
 		if exists && fi.IsDir() {
 			// A managed directory whose mode differs across machines
-			// (e.g. ~/.ssh at 0755 vs the source's 0700): never move it
-			// to backups (that would take every unmanaged file under
-			// it), never re-add it (that would push the looser mode
-			// upstream). Apply fixes only the dir's own mode. But a
-			// directory sitting where the source has a FILE would make
-			// apply prompt (and wedge under --no-tty): that one is
-			// foreign, so it gets moved to backups first.
+			// (e.g. ~/.ssh at 0755 vs the source's 0700): never discard
+			// it (that would take every unmanaged file under it), never
+			// re-add it (that would push the looser mode upstream).
+			// Apply fixes only the dir's own mode. But a directory
+			// sitting where the source has a FILE would make apply
+			// prompt (and wedge under --no-tty): that one is foreign,
+			// so it gets discarded first.
 			if managedDirs[abs] {
 				remote = append(remote, abs)
 			} else {
@@ -345,7 +345,7 @@ func Reconcile(cfg *config.Config, lg *log.Logger) error {
 	// here (e.g. a merge-mangled deletion log) must not block the rest
 	// of the pass: with a nil baseline every missing file downgrades to
 	// the safe "apply it back" path below.
-	prevManaged, err := applyIncomingDeletions(lg)
+	prevManaged, err := applyIncomingDeletions(cfg, lg)
 	if err != nil {
 		lg.Printf("files: incoming deletions: %v (skipping)", err)
 	}
@@ -397,7 +397,7 @@ func Reconcile(cfg *config.Config, lg *log.Logger) error {
 	}
 	if len(deleted) > 0 {
 		// A locally deleted synced file is deleted everywhere: the other
-		// machines move their copies to backups, and the content stays
+		// machines discard their copies, and the content stays
 		// recoverable from the sync repo's history (`lichen sync recover`).
 		// A failure only defers the deletion to the next pass, so it
 		// must not block the applies below.
@@ -412,11 +412,11 @@ func Reconcile(cfg *config.Config, lg *log.Logger) error {
 	}
 	for _, abs := range foreign {
 		if _, statErr := os.Lstat(abs); statErr == nil {
-			to, berr := backup.Move(abs)
+			to, berr := backup.Discard(abs, cfg.Backups)
 			if berr != nil {
-				return fmt.Errorf("backing up %s: %w", abs, berr)
+				return fmt.Errorf("replacing %s: %w", abs, berr)
 			}
-			lg.Printf("files: backed up %s → %s", abs, to)
+			lg.Printf("files: replacing local %s with the synced version%s", abs, keptAt(to))
 		}
 	}
 	targets := append(foreign, remote...)
@@ -568,10 +568,10 @@ func LocalChange(cfg *config.Config, lg *log.Logger, paths []string) (bool, erro
 	return changed, errors.Join(readdErr, propErr)
 }
 
-// Sync starts managing new paths (chezmoi add) and pushes. The pre-lichen
-// original of each newly managed file is snapshotted first: from this
-// moment on lichen may overwrite it, so this is the last chance to
-// preserve what the machine had.
+// Sync starts managing new paths (chezmoi add) and pushes. With backups
+// on, the pre-lichen original of each newly managed file is snapshotted
+// first: from this moment on lichen may overwrite it, so this is the
+// last chance to preserve what the machine had.
 func Sync(cfg *config.Config, lg *log.Logger, paths []string) error {
 	if _, err := exec.LookPath("chezmoi"); err != nil {
 		return fmt.Errorf("chezmoi not installed (re-run install.sh)")
@@ -606,6 +606,9 @@ func Sync(cfg *config.Config, lg *log.Logger, paths []string) error {
 			return fmt.Errorf("%s is outside the home directory, only files under ~ can be synced", p)
 		}
 		absPaths = append(absPaths, abs)
+		if !cfg.Backups {
+			continue
+		}
 		if _, err := os.Stat(abs); err != nil {
 			continue // chezmoi add will report the missing path
 		}

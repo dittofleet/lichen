@@ -22,6 +22,9 @@ type Config struct {
 	// generated topic is the channel's only secret. The JSON key is
 	// historical, kept so existing configs stay valid.
 	Topic string `json:"topic_prefix"`
+	// Backups keeps files lichen overwrites or deletes in
+	// ~/lichen-backups instead of removing them (see internal/backup).
+	Backups bool `json:"backups,omitempty"`
 }
 
 var homeOnce = sync.OnceValues(os.UserHomeDir)
