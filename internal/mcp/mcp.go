@@ -225,7 +225,7 @@ func Reconcile(lg *log.Logger) error {
 			}
 			if err := h.add(name, want); err != nil {
 				if errors.Is(err, errTaken) {
-					lg.Printf("mcp: NOT installing %s in %s (it already has a server by that name; remove it there to let lichen manage it)", name, h.name())
+					lg.Printf("mcp: NOT installing %s in %s (it already has a server by that name, remove it there to let lichen manage it)", name, h.name())
 				} else {
 					lg.Printf("mcp: installing %s in %s: %v", name, h.name(), err)
 				}
