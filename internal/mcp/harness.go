@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,6 +8,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -102,7 +102,11 @@ func (codex) available() bool {
 }
 
 func (c codex) add(name string, s Server) error {
-	if c.has(name) {
+	taken, err := c.has(name)
+	if err != nil {
+		return err
+	}
+	if taken {
 		return errTaken
 	}
 	if s.URL == "" {
@@ -123,35 +127,60 @@ func (c codex) addURL(name, url string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "codex", "mcp", "add", name, "--url", url)
+	// A writer rather than a pipe: exec copies the output itself, and
+	// WaitDelay then bounds that copy even if a child of codex keeps the
+	// pipe open after codex is killed.
+	out := &stopWriter{marker: "Added global MCP server", stop: cancel}
+	cmd.Stdout, cmd.Stderr = out, out
 	cmd.WaitDelay = 5 * time.Second
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	stdout, err := cmd.StdoutPipe()
+	runErr := cmd.Run()
+	added, err := c.has(name)
 	if err != nil {
 		return err
 	}
-	if err := cmd.Start(); err != nil {
-		return err
+	if !added {
+		return fmt.Errorf("codex mcp add: %v (%s)", runErr, out.String())
 	}
-	var out []string
-	sc := bufio.NewScanner(stdout)
-	for sc.Scan() {
-		out = append(out, sc.Text())
-		if strings.HasPrefix(sc.Text(), "Added global MCP server") {
-			cancel()
-			break
-		}
-	}
-	waitErr := cmd.Wait()
-	if c.has(name) {
-		return nil
-	}
-	return fmt.Errorf("codex mcp add: %v (%s)", waitErr, strings.TrimSpace(strings.Join(out, "\n")+"\n"+stderr.String()))
+	return nil
 }
 
-func (codex) has(name string) bool {
-	_, err := run("codex", "mcp", "get", name, "--json")
-	return err == nil
+// stopWriter collects a command's output and calls stop once marker
+// shows up in it.
+type stopWriter struct {
+	mu     sync.Mutex
+	buf    bytes.Buffer
+	marker string
+	stop   func()
+}
+
+func (w *stopWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buf.Write(p)
+	if strings.Contains(w.buf.String(), w.marker) {
+		w.stop()
+	}
+	return len(p), nil
+}
+
+func (w *stopWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return strings.TrimSpace(w.buf.String())
+}
+
+// has reports whether Codex has a server by this name. Only Codex's own
+// "not found" answer counts as absent: any other failure is an error,
+// since `codex mcp add` would silently replace a server it missed.
+func (codex) has(name string) (bool, error) {
+	out, err := run("codex", "mcp", "get", name, "--json")
+	if err == nil {
+		return true, nil
+	}
+	if strings.Contains(out, "No MCP server named") {
+		return false, nil
+	}
+	return false, err
 }
 
 func (codex) remove(name string) error {

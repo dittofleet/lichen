@@ -154,6 +154,16 @@ func TestReconcile(t *testing.T) {
 	expect(claude)
 	expect(codex)
 
+	// Neither is an mcp.json holding a bare null.
+	if err := os.WriteFile(p, []byte("null\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Reconcile(lg); err == nil {
+		t.Error("null mcp.json: expected an error")
+	}
+	expect(claude)
+	expect(codex)
+
 	// No mcp.json at all is not "remove everything".
 	if err := os.Remove(p); err != nil {
 		t.Fatal(err)

@@ -7,6 +7,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -143,8 +144,9 @@ func ContractHome(abs string) string {
 	return "~/" + filepath.ToSlash(rel)
 }
 
-// ReadJSON unmarshals the JSON file at path into v. A missing file is
-// not an error: exists reports it, and v is left untouched.
+// ReadJSON unmarshals the JSON object in the file at path into v. A
+// missing file is not an error: exists reports it, and v is left
+// untouched.
 func ReadJSON(path string, v any) (exists bool, err error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -152,6 +154,11 @@ func ReadJSON(path string, v any) (exists bool, err error) {
 	}
 	if err != nil {
 		return false, err
+	}
+	// A bare null would decode as an empty file, and for a module config
+	// that reads as "uninstall everything".
+	if string(bytes.TrimSpace(data)) == "null" {
+		return true, fmt.Errorf("parsing %s: not a JSON object", path)
 	}
 	if err := json.Unmarshal(data, v); err != nil {
 		return true, fmt.Errorf("parsing %s: %w", path, err)

@@ -250,6 +250,9 @@ func Reconcile(lg *log.Logger) error {
 				continue
 			}
 			man.forget(name, h.name())
+			if err := man.save(); err != nil {
+				return err
+			}
 			lg.Printf("mcp: removed %s from %s", name, h.name())
 		}
 	}
