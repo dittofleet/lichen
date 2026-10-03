@@ -1,9 +1,9 @@
 // Package config defines lichen's config files under ~/.config/lichen,
 // one per owner: config.json (the event channel, seeded by the
-// installer) and skills.json (skill sources, rewritten by the skills
-// CLI). Both are synced across machines, so everything in them is
-// machine-portable, and an apply can replace either with another
-// machine's version.
+// installer), skills.json (skill sources, rewritten by the skills CLI)
+// and mcp.json (MCP servers, rewritten by the mcp CLI). All are synced
+// across machines, so everything in them is machine-portable, and an
+// apply can replace any of them with another machine's version.
 package config
 
 import (
@@ -50,6 +50,11 @@ func SkillsPath() (string, error) {
 	return HomeJoin(".config", "lichen", "skills.json")
 }
 
+// MCPPath is the mcp module's config: which MCP servers to install.
+func MCPPath() (string, error) {
+	return HomeJoin(".config", "lichen", "mcp.json")
+}
+
 // OwnedPaths are the config files lichen itself writes: the set the
 // files module keeps in the sync repo. Empty when home can't resolve.
 func OwnedPaths() []string {
@@ -60,12 +65,15 @@ func OwnedPaths() []string {
 	if p, err := SkillsPath(); err == nil {
 		paths = append(paths, p)
 	}
+	if p, err := MCPPath(); err == nil {
+		paths = append(paths, p)
+	}
 	return paths
 }
 
 // DataDir holds lichen's machine-local state: the cross-process lock,
-// the managed-set manifest, the skills manifest, and the skill repo
-// clones.
+// the managed-set manifest, the skills and mcp manifests, and the skill
+// repo clones.
 func DataDir() (string, error) {
 	return HomeJoin(".local", "share", "lichen")
 }
@@ -137,4 +145,21 @@ func ContractHome(abs string) string {
 		return "~"
 	}
 	return "~/" + filepath.ToSlash(rel)
+}
+
+// WriteJSON writes v as pretty JSON via a temp file and rename, so a
+// crash never leaves a half-written file behind.
+func WriteJSON(path string, v any) error {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }

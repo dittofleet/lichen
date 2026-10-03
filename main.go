@@ -1,7 +1,8 @@
 // lichen keeps your dev machines in sync, one module per kind of thing:
-// files (dotfiles, slash commands, anything under your home directory)
-// and agent skills installed from public repos. One daemon per machine,
-// edits propagate within seconds via ntfy, skill repos are polled.
+// files (dotfiles, slash commands, anything under your home directory),
+// agent skills installed from public repos, and MCP servers. One daemon
+// per machine, edits propagate within seconds via ntfy, skill repos are
+// polled.
 package main
 
 import (
@@ -24,6 +25,7 @@ import (
 	"lichen/internal/events"
 	"lichen/internal/files"
 	"lichen/internal/gitutil"
+	"lichen/internal/mcp"
 	"lichen/internal/module"
 	"lichen/internal/proclock"
 	"lichen/internal/selfupdate"
@@ -46,6 +48,8 @@ func main() {
 		err = cmdSyncCmd(args[1:])
 	case "skills":
 		err = cmdSkills(args[1:])
+	case "mcp":
+		err = cmdMCP(args[1:])
 	case "logs":
 		err = cmdLogs()
 	case "daemon":
@@ -122,6 +126,11 @@ func usage() {
                                    stop syncing skills (uninstalls them)
   lichen skills list               show every synced skill
   lichen skills update             check skill repos for updates now
+
+  lichen mcp add <name> <command> [args...]
+  lichen mcp add <name> <url>      install an MCP server in every harness
+  lichen mcp remove <name...>      stop syncing MCP servers (uninstalls them)
+  lichen mcp list                  show every synced MCP server
 
   lichen status [--secrets]        daemon health and webhook setup
                                     (--secrets reveals the topic URL)
@@ -267,18 +276,17 @@ func cmdSkills(args []string) error {
 	return fmt.Errorf("usage: lichen skills <add|remove|list|update>")
 }
 
-// skillsChange is the shared tail of the mutating skills subcommands:
-// pull the freshest shared state, apply a skills-config edit on top of
-// it, make the installed skills match, and publish the change to the
-// other machines. force bypasses the poll throttle, for edits that need
-// fresh upstream state.
-func skillsChange(force bool, edit func() (subject string, err error)) error {
+// configChange is the shared tail of the mutating skills and mcp
+// subcommands: pull the freshest shared state, apply an edit to the
+// module's config file on top of it, make the installed things match
+// (refresh), and publish the change to the other machines.
+func configChange(path string, refresh func(*log.Logger) error, edit func() (subject string, err error)) error {
 	lg := clilog()
 	cfg, err := files.LoadConfig(lg)
 	if err != nil {
 		return err
 	}
-	// Pull before editing: skills.json is shared state, and an edit on a
+	// Pull before editing: module configs are shared state, and an edit on a
 	// stale copy would push the staleness (commitPush resolves conflicts
 	// in favor of the local commit, silently reverting another machine's
 	// change). Offline just means the edit bases on the freshest state
@@ -295,21 +303,21 @@ func skillsChange(force bool, edit func() (subject string, err error)) error {
 	if err != nil {
 		return err
 	}
-	refresh := skills.Reconcile
-	if force {
-		refresh = skills.Update
-	}
 	if err := refresh(lg); err != nil {
 		return err
 	}
-	skillsPath, err := config.SkillsPath()
-	if err != nil {
-		return err
-	}
-	if err := files.CaptureConfig(cfg, subject, skillsPath, lg); err != nil {
+	if err := files.CaptureConfig(cfg, subject, path, lg); err != nil {
 		lg.Printf("config not pushed (%v), other machines catch up on a later pass", err)
 	}
 	return nil
+}
+
+func skillsChange(refresh func(*log.Logger) error, edit func() (string, error)) error {
+	p, err := config.SkillsPath()
+	if err != nil {
+		return err
+	}
+	return configChange(p, refresh, edit)
 }
 
 func cmdSkillsAdd(args []string) error {
@@ -336,7 +344,7 @@ func cmdSkillsAdd(args []string) error {
 	// force: adding is the moment upstream freshness is user-visible
 	// (--skill names are validated against the repo's current state).
 	var key string
-	err := skillsChange(true, func() (string, error) {
+	err := skillsChange(skills.Update, func() (string, error) {
 		var err error
 		key, err = skills.AddSource(repo, only)
 		return "skills: add " + key, err
@@ -366,8 +374,8 @@ func cmdSkillsRemove(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: lichen skills remove <repo|skill...>")
 	}
-	// No force: removal needs no upstream contact at all.
-	err := skillsChange(false, func() (string, error) {
+	// No forced poll: removal needs no upstream contact at all.
+	err := skillsChange(skills.Reconcile, func() (string, error) {
 		return "skills: remove " + strings.Join(args, " "), skills.RemoveSources(args)
 	})
 	if err != nil {
@@ -414,6 +422,107 @@ func cmdSkillsList() error {
 		if !fromRepo[key] {
 			fmt.Printf("%s\n", dim(key+" (nothing installed yet, see: lichen logs)"))
 		}
+	}
+	return nil
+}
+
+func cmdMCP(args []string) error {
+	sub := ""
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	switch sub {
+	case "add":
+		return withLock(func() error { return cmdMCPAdd(args[1:]) })
+	case "remove", "rm":
+		return withLock(func() error { return cmdMCPRemove(args[1:]) })
+	case "list", "ls":
+		return cmdMCPList()
+	}
+	return fmt.Errorf("usage: lichen mcp <add|remove|list>")
+}
+
+func mcpChange(edit func() (string, error)) error {
+	p, err := config.MCPPath()
+	if err != nil {
+		return err
+	}
+	return configChange(p, mcp.Reconcile, edit)
+}
+
+func cmdMCPAdd(args []string) error {
+	// A `--` before the command is what `claude mcp add` and `codex mcp
+	// add` expect, so tolerate it out of habit.
+	if len(args) > 1 && args[1] == "--" {
+		args = slices.Delete(slices.Clone(args), 1, 2)
+	}
+	if len(args) < 2 {
+		return fmt.Errorf("usage: lichen mcp add <name> <command> [args...]  or  lichen mcp add <name> <url>")
+	}
+	name, rest := args[0], args[1:]
+	s := mcp.Server{Command: rest[0], Args: rest[1:]}
+	if mcp.IsURL(rest[0]) {
+		if len(rest) > 1 {
+			return fmt.Errorf("a url takes no arguments (got %q)", strings.Join(rest[1:], " "))
+		}
+		s = mcp.Server{URL: rest[0]}
+	}
+	err := mcpChange(func() (string, error) {
+		return "mcp: add " + name, mcp.AddServer(name, s)
+	})
+	if err != nil {
+		return err
+	}
+	entries, err := mcp.List()
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Name != name {
+			continue
+		}
+		if len(e.Harnesses) == 0 {
+			fmt.Printf("syncing %s, but it isn't installed on this machine (see messages above)\n", name)
+			return nil
+		}
+		fmt.Printf("syncing %s, installed in %s (restart running sessions to pick it up)\n", name, strings.Join(e.Harnesses, ", "))
+	}
+	return nil
+}
+
+func cmdMCPRemove(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: lichen mcp remove <name...>")
+	}
+	err := mcpChange(func() (string, error) {
+		return "mcp: remove " + strings.Join(args, " "), mcp.RemoveServers(args)
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("stopped syncing: %s\n", strings.Join(args, ", "))
+	return nil
+}
+
+func cmdMCPList() error {
+	entries, err := mcp.List()
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		fmt.Println("no MCP servers synced (lichen mcp add <name> <command or url>)")
+		return nil
+	}
+	width := 0
+	for _, e := range entries {
+		width = max(width, len(e.Name))
+	}
+	for _, e := range entries {
+		where := "not installed here, see: lichen logs"
+		if len(e.Harnesses) > 0 {
+			where = strings.Join(e.Harnesses, ", ")
+		}
+		fmt.Printf("%-*s  %s  %s\n", width, e.Name, e.Server, dim("("+where+")"))
 	}
 	return nil
 }
@@ -474,6 +583,14 @@ func cmdStatus(showSecrets bool) error {
 		if repos := skills.ConfiguredKeys(); len(repos) > 0 || len(installed) > 0 {
 			fmt.Printf("\n%s %s\n", bold(fmt.Sprintf("skills (%d installed):", len(installed))), strings.Join(repos, ", "))
 		}
+	}
+
+	if entries, err := mcp.List(); err == nil && len(entries) > 0 {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name)
+		}
+		fmt.Printf("\n%s %s\n", bold(fmt.Sprintf("mcp (%d servers):", len(entries))), strings.Join(names, ", "))
 	}
 
 	// The webhook is optional: lichen already nudges the other machines

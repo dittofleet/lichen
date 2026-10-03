@@ -149,24 +149,7 @@ func saveSources(sources []Source) error {
 		}
 		raw["sources"] = enc
 	}
-	return writeJSON(p, raw)
-}
-
-// writeJSON writes v as pretty JSON via a temp file and rename, so a
-// crash never leaves a half-written file behind.
-func writeJSON(path string, v any) error {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return config.WriteJSON(p, raw)
 }
 
 // The manifest records what THIS machine has installed and from where.
@@ -251,7 +234,7 @@ func (m *manifest) save() error {
 	if err != nil {
 		return err
 	}
-	return writeJSON(p, m)
+	return config.WriteJSON(p, m)
 }
 
 // parseSpec canonicalizes a repo spec to a "host/owner/repo" key and a

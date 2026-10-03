@@ -28,7 +28,6 @@ import (
 	"lichen/internal/module"
 	"lichen/internal/proclock"
 	"lichen/internal/selfupdate"
-	"lichen/internal/skills"
 	"lichen/internal/version"
 )
 
@@ -312,12 +311,12 @@ func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config
 				}
 				// A hand-edited module config (say, skills.json's
 				// harnesses list) reaches the other machines via the
-				// push above. Reconcile skills HERE too, or the machine
-				// the user typed on would be the last to converge.
+				// push above. Reconcile the modules HERE too, or the
+				// machine the user typed on would be the last to converge.
 				owned := config.OwnedPaths()
 				if slices.ContainsFunc(paths, func(p string) bool { return slices.Contains(owned, p) }) {
-					if err := skills.Reconcile(lg); err != nil {
-						lg.Printf("skills: %v", err)
+					if err := module.ReconcileConfigured(lg); err != nil {
+						lg.Printf("%v", err)
 					}
 				}
 			})
