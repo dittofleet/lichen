@@ -64,6 +64,8 @@ func validate(name string, s Server) error {
 		return fmt.Errorf("%s url %q is not http(s)", name, s.URL)
 	case s.URL == "" && s.Command == "":
 		return fmt.Errorf("%s has neither a url nor a command", name)
+	case strings.HasPrefix(s.Command, "-"):
+		return fmt.Errorf("%s command %q looks like a flag (lichen mcp add takes no flags)", name, s.Command)
 	}
 	return nil
 }
@@ -158,6 +160,8 @@ func (m *manifest) forget(name, harness string) {
 	}
 }
 
+var missingLogged = map[string]bool{}
+
 // Reconcile makes every available harness's lichen-installed servers
 // match the mcp config: add what's missing, replace what changed, and
 // remove what the config no longer lists. A server that fails in one
@@ -195,7 +199,10 @@ func Reconcile(lg *log.Logger) error {
 
 	for _, h := range harnesses {
 		if !h.available() {
-			if len(desired) > 0 {
+			// Once per process: a machine without this harness would
+			// otherwise repeat it on every daemon pass.
+			if len(desired) > 0 && !missingLogged[h.name()] {
+				missingLogged[h.name()] = true
 				lg.Printf("mcp: %s not found on PATH, skipping it", h.name())
 			}
 			continue

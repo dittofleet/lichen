@@ -59,7 +59,7 @@ func TestValidate(t *testing.T) {
 			t.Errorf("validate(%v): %v", s, err)
 		}
 	}
-	bad := []Server{{}, {URL: "ftp://x"}, {URL: "https://x", Command: "y"}, {Args: []string{"x"}}}
+	bad := []Server{{}, {URL: "ftp://x"}, {URL: "https://x", Command: "y"}, {Args: []string{"x"}}, {Command: "--url", Args: []string{"https://x"}}}
 	for _, s := range bad {
 		if validate("x", s) == nil {
 			t.Errorf("validate(%+v): expected error", s)
