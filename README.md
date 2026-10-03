@@ -1,3 +1,5 @@
+<img src="assets/icon.svg" width="80" alt="lichen icon">
+
 # lichen
 
 A project for easily keeping macOS dev environments in sync.
