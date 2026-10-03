@@ -31,7 +31,7 @@ var errTaken = errors.New("name already taken")
 
 // harnesses lists the supported harnesses. A var so tests can swap in
 // fakes.
-var harnesses = func() []harness { return []harness{claude{}, codex{}} }
+var harnesses = []harness{claude{}, codex{}}
 
 // cliTimeout bounds every harness command: the caller holds the
 // cross-process lock, so a wedged CLI must not wedge the daemon.
@@ -44,6 +44,9 @@ func run(bin string, args ...string) (string, error) {
 	cmd.WaitDelay = 5 * time.Second
 	out, err := cmd.CombinedOutput()
 	text := strings.TrimSpace(string(out))
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return text, fmt.Errorf("%s %s: timed out after %s", bin, strings.Join(args[:min(2, len(args))], " "), cliTimeout)
+	}
 	if err != nil {
 		return text, fmt.Errorf("%s %s: %w (%s)", bin, strings.Join(args[:min(2, len(args))], " "), err, text)
 	}
@@ -63,11 +66,9 @@ func (claude) available() bool {
 }
 
 func (claude) add(name string, s Server) error {
-	entry := map[string]any{"type": "stdio", "command": s.Command, "args": s.Args}
-	if s.URL != "" {
-		entry = map[string]any{"type": "http", "url": s.URL}
-	} else if s.Args == nil {
-		entry["args"] = []string{}
+	entry := map[string]any{"type": "http", "url": s.URL}
+	if s.URL == "" {
+		entry = map[string]any{"type": "stdio", "command": s.Command, "args": append([]string{}, s.Args...)}
 	}
 	data, err := json.Marshal(entry)
 	if err != nil {
@@ -116,9 +117,10 @@ func (c codex) add(name string, s Server) error {
 // it works without one. Nobody would be there to finish that login, so
 // the command is stopped as soon as it reports the server saved (the
 // config is written before the login starts), and the result is
-// confirmed with `codex mcp get`.
+// confirmed with `codex mcp get`. The short deadline caps the wait in
+// case that message ever changes.
 func (c codex) addURL(name, url string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), cliTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "codex", "mcp", "add", name, "--url", url)
 	cmd.WaitDelay = 5 * time.Second

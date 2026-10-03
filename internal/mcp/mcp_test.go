@@ -44,24 +44,24 @@ func (f *fake) takeCalls() []string {
 
 func TestValidate(t *testing.T) {
 	for _, n := range []string{"playwright", "my_server-2"} {
-		if err := validateName(n); err != nil {
+		if err := validate(n, Server{Command: "x"}); err != nil {
 			t.Errorf("validateName(%q): %v", n, err)
 		}
 	}
 	for _, n := range []string{"", "a.b", "a b", "owner/repo", "x:y"} {
-		if validateName(n) == nil {
+		if validate(n, Server{Command: "x"}) == nil {
 			t.Errorf("validateName(%q): expected error", n)
 		}
 	}
 	good := []Server{{Command: "bunx", Args: []string{"x"}}, {Command: "x"}, {URL: "https://example.com/mcp"}}
 	for _, s := range good {
-		if err := s.validate(); err != nil {
+		if err := validate("x", s); err != nil {
 			t.Errorf("validate(%v): %v", s, err)
 		}
 	}
 	bad := []Server{{}, {URL: "ftp://x"}, {URL: "https://x", Command: "y"}, {Args: []string{"x"}}}
 	for _, s := range bad {
-		if s.validate() == nil {
+		if validate("x", s) == nil {
 			t.Errorf("validate(%+v): expected error", s)
 		}
 	}
@@ -75,7 +75,7 @@ func TestReconcile(t *testing.T) {
 	}
 	claude := &fake{id: "claude", servers: map[string]Server{"mine": {Command: "own"}}}
 	codex := &fake{id: "codex", servers: map[string]Server{}}
-	harnesses = func() []harness { return []harness{claude, codex} }
+	harnesses = []harness{claude, codex}
 	lg := log.New(io.Discard, "", 0)
 	reconcile := func() {
 		t.Helper()

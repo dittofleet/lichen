@@ -280,7 +280,11 @@ func cmdSkills(args []string) error {
 // subcommands: pull the freshest shared state, apply an edit to the
 // module's config file on top of it, make the installed things match
 // (refresh), and publish the change to the other machines.
-func configChange(path string, refresh func(*log.Logger) error, edit func() (subject string, err error)) error {
+func configChange(path func() (string, error), refresh func(*log.Logger) error, edit func() (subject string, err error)) error {
+	p, err := path()
+	if err != nil {
+		return err
+	}
 	lg := clilog()
 	cfg, err := files.LoadConfig(lg)
 	if err != nil {
@@ -306,18 +310,10 @@ func configChange(path string, refresh func(*log.Logger) error, edit func() (sub
 	if err := refresh(lg); err != nil {
 		return err
 	}
-	if err := files.CaptureConfig(cfg, subject, path, lg); err != nil {
+	if err := files.CaptureConfig(cfg, subject, p, lg); err != nil {
 		lg.Printf("config not pushed (%v), other machines catch up on a later pass", err)
 	}
 	return nil
-}
-
-func skillsChange(refresh func(*log.Logger) error, edit func() (string, error)) error {
-	p, err := config.SkillsPath()
-	if err != nil {
-		return err
-	}
-	return configChange(p, refresh, edit)
 }
 
 func cmdSkillsAdd(args []string) error {
@@ -344,7 +340,7 @@ func cmdSkillsAdd(args []string) error {
 	// force: adding is the moment upstream freshness is user-visible
 	// (--skill names are validated against the repo's current state).
 	var key string
-	err := skillsChange(skills.Update, func() (string, error) {
+	err := configChange(config.SkillsPath, skills.Update, func() (string, error) {
 		var err error
 		key, err = skills.AddSource(repo, only)
 		return "skills: add " + key, err
@@ -375,7 +371,7 @@ func cmdSkillsRemove(args []string) error {
 		return fmt.Errorf("usage: lichen skills remove <repo|skill...>")
 	}
 	// No forced poll: removal needs no upstream contact at all.
-	err := skillsChange(skills.Reconcile, func() (string, error) {
+	err := configChange(config.SkillsPath, skills.Reconcile, func() (string, error) {
 		return "skills: remove " + strings.Join(args, " "), skills.RemoveSources(args)
 	})
 	if err != nil {
@@ -442,14 +438,6 @@ func cmdMCP(args []string) error {
 	return fmt.Errorf("usage: lichen mcp <add|remove|list>")
 }
 
-func mcpChange(edit func() (string, error)) error {
-	p, err := config.MCPPath()
-	if err != nil {
-		return err
-	}
-	return configChange(p, mcp.Reconcile, edit)
-}
-
 func cmdMCPAdd(args []string) error {
 	// A `--` before the command is what `claude mcp add` and `codex mcp
 	// add` expect, so tolerate it out of habit.
@@ -467,7 +455,7 @@ func cmdMCPAdd(args []string) error {
 		}
 		s = mcp.Server{URL: rest[0]}
 	}
-	err := mcpChange(func() (string, error) {
+	err := configChange(config.MCPPath, mcp.Reconcile, func() (string, error) {
 		return "mcp: add " + name, mcp.AddServer(name, s)
 	})
 	if err != nil {
@@ -494,7 +482,7 @@ func cmdMCPRemove(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: lichen mcp remove <name...>")
 	}
-	err := mcpChange(func() (string, error) {
+	err := configChange(config.MCPPath, mcp.Reconcile, func() (string, error) {
 		return "mcp: remove " + strings.Join(args, " "), mcp.RemoveServers(args)
 	})
 	if err != nil {

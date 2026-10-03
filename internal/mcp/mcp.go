@@ -12,12 +12,10 @@
 package mcp
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"maps"
-	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -52,25 +50,20 @@ func IsURL(arg string) bool {
 	return strings.HasPrefix(arg, "https://") || strings.HasPrefix(arg, "http://")
 }
 
-func (s Server) validate() error {
-	switch {
-	case s.URL != "" && (s.Command != "" || len(s.Args) > 0):
-		return fmt.Errorf("has both a url and a command")
-	case s.URL != "" && !IsURL(s.URL):
-		return fmt.Errorf("url %q is not http(s)", s.URL)
-	case s.URL == "" && s.Command == "":
-		return fmt.Errorf("has neither a url nor a command")
-	}
-	return nil
-}
-
 // Names must work in every harness: Claude Code allows only letters,
 // digits, - and _ (Codex allows a superset).
 var nameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-func validateName(name string) error {
-	if !nameRe.MatchString(name) {
+func validate(name string, s Server) error {
+	switch {
+	case !nameRe.MatchString(name):
 		return fmt.Errorf("invalid server name %q (use letters, digits, - and _)", name)
+	case s.URL != "" && (s.Command != "" || len(s.Args) > 0):
+		return fmt.Errorf("%s has both a url and a command", name)
+	case s.URL != "" && !IsURL(s.URL):
+		return fmt.Errorf("%s url %q is not http(s)", name, s.URL)
+	case s.URL == "" && s.Command == "":
+		return fmt.Errorf("%s has neither a url nor a command", name)
 	}
 	return nil
 }
@@ -88,51 +81,28 @@ func loadConfig() (cfg *mcpConfig, exists bool, err error) {
 	if err != nil {
 		return nil, false, err
 	}
-	cfg = &mcpConfig{Servers: map[string]Server{}}
-	data, err := os.ReadFile(p)
-	if os.IsNotExist(err) {
-		return cfg, false, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	if err := json.Unmarshal(data, cfg); err != nil {
-		return nil, true, fmt.Errorf("parsing %s: %w", p, err)
+	cfg = &mcpConfig{}
+	if exists, err = config.ReadJSON(p, cfg); err != nil {
+		return nil, exists, err
 	}
 	if cfg.Servers == nil {
 		cfg.Servers = map[string]Server{}
 	}
-	return cfg, true, nil
+	return cfg, exists, nil
 }
 
-// saveServers rewrites the servers map inside mcp.json, keeping any
-// top-level field this build doesn't know about: the file is shared by
-// machines that may run different lichen versions.
+// saveServers rewrites the servers map inside mcp.json.
 func saveServers(servers map[string]Server) error {
 	p, err := config.MCPPath()
 	if err != nil {
 		return err
 	}
-	raw := map[string]json.RawMessage{}
-	if data, err := os.ReadFile(p); err == nil {
-		if err := json.Unmarshal(data, &raw); err != nil {
-			return fmt.Errorf("parsing %s: %w", p, err)
-		}
-	} else if !os.IsNotExist(err) {
-		return err
-	}
 	if len(servers) == 0 {
 		// The file stays (deleting a managed file makes the files module
 		// restore it), just with no servers.
-		delete(raw, "servers")
-	} else {
-		enc, err := json.Marshal(servers)
-		if err != nil {
-			return err
-		}
-		raw["servers"] = enc
+		return config.SetJSONField(p, "servers", nil)
 	}
-	return config.WriteJSON(p, raw)
+	return config.SetJSONField(p, "servers", servers)
 }
 
 // The manifest records what THIS machine installed into which harness:
@@ -157,15 +127,8 @@ func loadManifest() (*manifest, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(p)
-	if os.IsNotExist(err) {
-		return m, nil
-	}
-	if err != nil {
+	if _, err := config.ReadJSON(p, m); err != nil {
 		return nil, err
-	}
-	if err := json.Unmarshal(data, m); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", p, err)
 	}
 	if m.Servers == nil {
 		m.Servers = map[string]map[string]Server{}
@@ -222,25 +185,15 @@ func Reconcile(lg *log.Logger) error {
 	}
 
 	desired := map[string]Server{}
-	// A hand-edited entry this build rejects keeps whatever lichen
-	// installed under its name, rather than reading as a removal.
-	keep := map[string]bool{}
 	for _, name := range slices.Sorted(maps.Keys(cfg.Servers)) {
-		s := cfg.Servers[name]
-		if err := validateName(name); err != nil {
+		if err := validate(name, cfg.Servers[name]); err != nil {
 			lg.Printf("mcp: %v", err)
-			keep[name] = true
 			continue
 		}
-		if err := s.validate(); err != nil {
-			lg.Printf("mcp: %s %v", name, err)
-			keep[name] = true
-			continue
-		}
-		desired[name] = s
+		desired[name] = cfg.Servers[name]
 	}
 
-	for _, h := range harnesses() {
+	for _, h := range harnesses {
 		if !h.available() {
 			if len(desired) > 0 {
 				lg.Printf("mcp: %s not found on PATH, skipping it", h.name())
@@ -287,7 +240,9 @@ func Reconcile(lg *log.Logger) error {
 			if _, owned := man.Servers[name][h.name()]; !owned {
 				continue
 			}
-			if _, ok := desired[name]; ok || keep[name] {
+			// A hand-edited entry this build rejects keeps whatever lichen
+			// installed under its name, rather than reading as a removal.
+			if _, ok := cfg.Servers[name]; ok {
 				continue
 			}
 			if err := h.remove(name); err != nil {
@@ -305,11 +260,8 @@ func Reconcile(lg *log.Logger) error {
 // the same name. Install happens on the next reconcile, which the CLI
 // runs immediately after.
 func AddServer(name string, s Server) error {
-	if err := validateName(name); err != nil {
+	if err := validate(name, s); err != nil {
 		return err
-	}
-	if err := s.validate(); err != nil {
-		return fmt.Errorf("%s %v", name, err)
 	}
 	cfg, _, err := loadConfig()
 	if err != nil {
