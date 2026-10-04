@@ -36,6 +36,14 @@ func (f *fake) add(n string, s Server) error {
 	return nil
 }
 
+func (f *fake) installed() (map[string]bool, error) {
+	names := map[string]bool{}
+	for n := range f.servers {
+		names[n] = true
+	}
+	return names, nil
+}
+
 func (f *fake) takeCalls() []string {
 	c := f.calls
 	f.calls = nil
@@ -98,7 +106,7 @@ func TestReconcile(t *testing.T) {
 		t.Fatal(err)
 	}
 	reconcile()
-	expect(claude, "add mine", "add pw")
+	expect(claude, "add pw") // its own "mine" is left alone
 	expect(codex, "add mine", "add pw")
 	// claude's own "mine" was taken: left alone, and not lichen's.
 	if claude.servers["mine"].Command != "own" {
@@ -114,8 +122,14 @@ func TestReconcile(t *testing.T) {
 
 	// Steady state runs no harness commands at all.
 	reconcile()
-	expect(claude, "add mine") // the taken name is retried, and refused again
+	expect(claude)
 	expect(codex)
+
+	// A server deleted by hand is put back.
+	delete(codex.servers, "pw")
+	reconcile()
+	expect(claude)
+	expect(codex, "add pw")
 
 	// A changed server is replaced, everywhere lichen installed it.
 	pw.Args = []string{"@playwright/mcp@1.0.0"}
@@ -123,7 +137,7 @@ func TestReconcile(t *testing.T) {
 		t.Fatal(err)
 	}
 	reconcile()
-	expect(claude, "add mine", "remove pw", "add pw")
+	expect(claude, "remove pw", "add pw")
 	expect(codex, "remove pw", "add pw")
 	if !codex.servers["pw"].equal(pw) {
 		t.Errorf("codex pw = %+v, want %+v", codex.servers["pw"], pw)

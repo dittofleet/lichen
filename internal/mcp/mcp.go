@@ -12,7 +12,6 @@
 package mcp
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"maps"
@@ -207,10 +206,25 @@ func Reconcile(lg *log.Logger) error {
 			}
 			continue
 		}
+		present, err := h.installed()
+		if err != nil {
+			lg.Printf("mcp: listing %s's servers: %v (skipping it this pass)", h.name(), err)
+			continue
+		}
 		for _, name := range slices.Sorted(maps.Keys(desired)) {
 			want := desired[name]
 			prev, owned := man.Servers[name][h.name()]
-			if owned && prev.equal(want) {
+			verb := "installed"
+			switch {
+			case owned && !present[name]:
+				// Removed by hand, or the harness config was reset: put it
+				// back, the way the skills module restores a deleted skill.
+				man.forget(name, h.name())
+				owned, verb = false, "restored"
+			case owned && prev.equal(want):
+				continue
+			case !owned && present[name]:
+				lg.Printf("mcp: NOT installing %s in %s (it already has a server by that name, remove it there to let lichen manage it)", name, h.name())
 				continue
 			}
 			if owned {
@@ -224,11 +238,7 @@ func Reconcile(lg *log.Logger) error {
 				}
 			}
 			if err := h.add(name, want); err != nil {
-				if errors.Is(err, errTaken) {
-					lg.Printf("mcp: NOT installing %s in %s (it already has a server by that name, remove it there to let lichen manage it)", name, h.name())
-				} else {
-					lg.Printf("mcp: installing %s in %s: %v", name, h.name(), err)
-				}
+				lg.Printf("mcp: installing %s in %s: %v", name, h.name(), err)
 				continue
 			}
 			// Persist each install as it lands, so a pass killed midway
@@ -237,7 +247,6 @@ func Reconcile(lg *log.Logger) error {
 			if err := man.save(); err != nil {
 				return err
 			}
-			verb := "installed"
 			if owned {
 				verb = "updated"
 			}
@@ -250,6 +259,11 @@ func Reconcile(lg *log.Logger) error {
 			// A hand-edited entry this build rejects keeps whatever lichen
 			// installed under its name, rather than reading as a removal.
 			if _, ok := cfg.Servers[name]; ok {
+				continue
+			}
+			// Already gone by hand: nothing to remove.
+			if !present[name] {
+				man.forget(name, h.name())
 				continue
 			}
 			if err := h.remove(name); err != nil {

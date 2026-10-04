@@ -6,10 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"lichen/internal/config"
 )
 
 // harness is one agent tool lichen installs MCP servers into, driven
@@ -25,6 +29,9 @@ type harness interface {
 	// remove uninstalls a server. A server that is already gone is not
 	// an error.
 	remove(name string) error
+	// installed lists the names of the servers the harness has at user
+	// scope, whoever added them.
+	installed() (map[string]bool, error)
 }
 
 var errTaken = errors.New("name already taken")
@@ -79,6 +86,29 @@ func (claude) add(name string, s Server) error {
 		return errTaken
 	}
 	return err
+}
+
+// installed reads ~/.claude.json directly (read-only): `claude mcp list`
+// would health-check every server, launching each local one.
+func (claude) installed() (map[string]bool, error) {
+	p := filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), ".claude.json")
+	if os.Getenv("CLAUDE_CONFIG_DIR") == "" {
+		var err error
+		if p, err = config.HomeJoin(".claude.json"); err != nil {
+			return nil, err
+		}
+	}
+	var cfg struct {
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if _, err := config.ReadJSON(p, &cfg); err != nil {
+		return nil, err
+	}
+	names := map[string]bool{}
+	for name := range cfg.MCPServers {
+		names[name] = true
+	}
+	return names, nil
 }
 
 func (claude) remove(name string) error {
@@ -181,6 +211,24 @@ func (codex) has(name string) (bool, error) {
 		return false, nil
 	}
 	return false, err
+}
+
+func (codex) installed() (map[string]bool, error) {
+	out, err := run("codex", "mcp", "list", "--json")
+	if err != nil {
+		return nil, err
+	}
+	var list []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(out), &list); err != nil {
+		return nil, fmt.Errorf("parsing codex mcp list: %w", err)
+	}
+	names := map[string]bool{}
+	for _, s := range list {
+		names[s.Name] = true
+	}
+	return names, nil
 }
 
 func (codex) remove(name string) error {

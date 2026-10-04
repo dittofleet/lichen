@@ -119,8 +119,9 @@ lichen mcp list
 Servers go in at user scope through each harness's own CLI (`claude mcp`
 and `codex mcp`), and a harness that isn't installed on a machine is
 skipped. lichen never touches a server it didn't add, so a name you
-already use in a harness is left alone there. Running sessions pick up
-changes after a restart.
+already use in a harness is left alone there. A lichen server deleted by
+hand comes back on the next pass, so remove it with `lichen mcp remove`
+instead. Running sessions pick up changes after a restart.
 
 The list of servers lives in its own synced config file
 (`~/.config/lichen/mcp.json`), so adding a server on one machine
