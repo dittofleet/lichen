@@ -11,6 +11,7 @@ It syncs things, one module per kind of thing:
   files and directories, so they sync like everything else.
 - **skills**: agent skills installed from public repos, kept up to date
   by polling.
+- **mcp**: MCP servers, installed into Claude Code and Codex.
 
 lichen is a pun on 'liken' and just how lichen behaves in general.
 
@@ -102,6 +103,30 @@ installs it everywhere, and removing one uninstalls it everywhere. The
 daemon polls each repo about hourly, and a repo moving only reinstalls
 the skills whose content actually changed. `lichen skills update` checks
 immediately.
+
+## MCP servers
+
+The mcp module installs MCP servers into Claude Code and Codex, from a
+command to launch or a URL to reach:
+
+```sh
+lichen mcp add playwright bunx @playwright/mcp@latest
+lichen mcp add context7 https://mcp.context7.com/mcp
+lichen mcp remove context7
+lichen mcp list
+```
+
+Servers go in at user scope through each harness's own CLI (`claude mcp`
+and `codex mcp`), and a harness that isn't installed on a machine is
+skipped. lichen never touches a server it didn't add, so a name you
+already use in a harness is left alone there. A lichen server deleted by
+hand comes back on the next pass, so remove it with `lichen mcp remove`
+instead. Running sessions pick up changes after a restart.
+
+The list of servers lives in its own synced config file
+(`~/.config/lichen/mcp.json`), so adding a server on one machine
+installs it everywhere, and removing one uninstalls it everywhere.
+Servers that need API keys, headers or a login aren't supported.
 
 ## Updates
 

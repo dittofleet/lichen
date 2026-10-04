@@ -15,7 +15,6 @@
 package skills
 
 import (
-	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log"
@@ -74,18 +73,11 @@ func loadConfig() (cfg *skillsConfig, exists bool, err error) {
 	if err != nil {
 		return nil, false, err
 	}
-	data, err := os.ReadFile(p)
-	if os.IsNotExist(err) {
-		return &skillsConfig{}, false, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
 	cfg = &skillsConfig{}
-	if err := json.Unmarshal(data, cfg); err != nil {
-		return nil, true, fmt.Errorf("parsing %s: %w", p, err)
+	if exists, err = config.ReadJSON(p, cfg); err != nil {
+		return nil, exists, err
 	}
-	return cfg, true, nil
+	return cfg, exists, nil
 }
 
 func loadSources() ([]Source, error) {
@@ -130,43 +122,12 @@ func saveSources(sources []Source) error {
 	if err != nil {
 		return err
 	}
-	raw := map[string]json.RawMessage{}
-	if data, err := os.ReadFile(p); err == nil {
-		if err := json.Unmarshal(data, &raw); err != nil {
-			return fmt.Errorf("parsing %s: %w", p, err)
-		}
-	} else if !os.IsNotExist(err) {
-		return err
-	}
 	if len(sources) == 0 {
 		// The file stays (deleting a managed file makes the files module
 		// restore it), just with no sources.
-		delete(raw, "sources")
-	} else {
-		enc, err := json.Marshal(sources)
-		if err != nil {
-			return err
-		}
-		raw["sources"] = enc
+		return config.SetJSONField(p, "sources", nil)
 	}
-	return writeJSON(p, raw)
-}
-
-// writeJSON writes v as pretty JSON via a temp file and rename, so a
-// crash never leaves a half-written file behind.
-func writeJSON(path string, v any) error {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return config.SetJSONField(p, "sources", sources)
 }
 
 // The manifest records what THIS machine has installed and from where.
@@ -227,15 +188,8 @@ func loadManifest() (*manifest, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(p)
-	if os.IsNotExist(err) {
-		return m, nil
-	}
-	if err != nil {
+	if _, err := config.ReadJSON(p, m); err != nil {
 		return nil, err
-	}
-	if err := json.Unmarshal(data, m); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", p, err)
 	}
 	if m.Repos == nil {
 		m.Repos = map[string]time.Time{}
@@ -251,7 +205,7 @@ func (m *manifest) save() error {
 	if err != nil {
 		return err
 	}
-	return writeJSON(p, m)
+	return config.WriteJSON(p, m)
 }
 
 // parseSpec canonicalizes a repo spec to a "host/owner/repo" key and a
