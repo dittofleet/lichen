@@ -213,40 +213,39 @@ func topMissing(abs string, managedDirs map[string]bool) string {
 // materialized here propagate (see the package comment). The one
 // exception is lichen's own config, the keystone every machine needs to
 // run at all: the config file is put back instead, and the rest of a
-// deleted subtree containing it is left alone. Returns whether the
-// managed set changed.
-func propagateDeletions(cfg *config.Config, lg *log.Logger, paths []string) (bool, error) {
+// deleted subtree containing it is left alone.
+func propagateDeletions(cfg *config.Config, lg *log.Logger, paths []string) error {
 	// Re-check existence at the last moment. The paths were seen missing
 	// earlier (at classify time, or at the watcher's debounce), and one
 	// that reappeared since (an editor's slow save dance, a racing
 	// apply) is not a deletion.
 	_, missing := partitionExisting(paths)
 	if len(missing) == 0 || !Active() {
-		return false, nil
+		return nil
 	}
 	src, err := SourcePath()
 	if err != nil {
-		return false, err
+		return err
 	}
 	cfgPath, err := config.Path()
 	if err != nil {
-		return false, err
+		return err
 	}
 	managedDirs, err := managedDirSet()
 	if err != nil {
-		return false, err
+		return err
 	}
 	for i, abs := range missing {
 		missing[i] = topMissing(abs, managedDirs)
 	}
 	written, err := entryStatePaths()
 	if err != nil {
-		return false, err
+		return err
 	}
 	writtenKeys := slices.Collect(maps.Keys(written))
 	dlog, err := loadDeletionLog(src)
 	if err != nil {
-		return false, err
+		return err
 	}
 	host, _ := os.Hostname()
 	at := time.Now().UTC().Format(time.RFC3339)
@@ -271,14 +270,14 @@ func propagateDeletions(cfg *config.Config, lg *log.Logger, paths []string) (boo
 		doomed = append(doomed, abs)
 	}
 	if len(doomed) == 0 {
-		return false, nil
+		return nil
 	}
 	if err := saveDeletionLog(src, dlog); err != nil {
-		return false, err
+		return err
 	}
 	lg.Printf("files: deleted locally, deleting everywhere (`lichen sync recover` brings one back): %v", doomed)
 	if _, err := chezmoi(append([]string{"forget", "--force"}, doomed...)...); err != nil {
-		return false, err
+		return err
 	}
 	dropEntryStateUnder(written, doomed)
 	// Consume this machine's own departure right away: the manifest still
@@ -288,7 +287,7 @@ func propagateDeletions(cfg *config.Config, lg *log.Logger, paths []string) (boo
 		lg.Printf("files: manifest: %v", err)
 	}
 	subject, body := commitMsg("delete", doomed)
-	return true, commitPush(cfg, subject, body, lg)
+	return commitPush(cfg, subject, body, lg)
 }
 
 // handleMissing routes classify's missing-file bucket. Only a path this
@@ -313,8 +312,7 @@ func handleMissing(cfg *config.Config, lg *log.Logger, prev []string, deleted []
 			lg.Printf("files: apply: %v", err)
 		}
 	}
-	_, err := propagateDeletions(cfg, lg, mine)
-	return err
+	return propagateDeletions(cfg, lg, mine)
 }
 
 // applyIncomingDeletions carries out deletions other machines pushed:

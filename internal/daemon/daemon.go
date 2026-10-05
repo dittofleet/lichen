@@ -1,14 +1,13 @@
 // Package daemon is lichen's long-running core: reconcile every module
-// on start, then react to the sync repo moving (via one idle ntfy
-// stream) and to local edits of managed files (via fsnotify). An hourly
-// pass is the backstop for events that never arrived, and doubles as the
-// skills module's poll of its upstream repos. Each pass re-reads the
-// config. Only the topic and server are fixed until restart.
+// on start, then react to the sync repo moving (via crosstalk nudges from
+// the other machines) and to local edits of managed files (via fsnotify).
+// An hourly pass is the backstop for events that never arrived, and
+// doubles as the skills module's poll of its upstream repos. Each pass
+// re-reads the config.
 package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log"
 	"maps"
@@ -17,6 +16,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -31,9 +31,8 @@ import (
 	"lichen/internal/version"
 )
 
-// pollInterval catches whatever the event stream missed: a push that
-// happened while this machine was asleep, or a webhook that was never
-// configured.
+// pollInterval catches whatever the nudges missed: a push made outside
+// lichen, or one while crosstalk was not running here.
 const pollInterval = time.Hour
 
 func Run() error {
@@ -41,36 +40,14 @@ func Run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	cfg, err := config.Load()
-	if err != nil {
-		// A missing config must heal HERE too, not only inside a pass:
-		// returning would make launchd's KeepAlive crash-loop the daemon
-		// without a pass ever running. The restore needs the lock.
-		if release, lerr := proclock.Acquire(ctx, nil); lerr == nil {
-			cfg, err = files.LoadConfig(lg)
-			release()
-		}
-		if err != nil {
-			return err
-		}
-	}
-	lg.Printf("lichen %s starting (server %s)", version.Current, cfg.Server())
-	hostname, _ := os.Hostname()
+	lg.Printf("lichen %s starting", version.Current)
 
 	// One mutex serializes every pass: a startup pass, the hourly pass,
 	// watcher flushes, and event bursts must never run git or chezmoi
-	// concurrently. rewatch nudges the file watcher to refresh its list
+	// concurrently. rewatch asks the file watcher to refresh its list
 	// whenever the managed set may have changed.
 	var mu sync.Mutex
 	rewatch := make(chan struct{}, 1)
-	// nudgeWatch asks the file watcher to refresh its managed-path list.
-	// Non-blocking: a full buffer already means a refresh is pending.
-	nudgeWatch := func() {
-		select {
-		case rewatch <- struct{}{}:
-		default:
-		}
-	}
 	// runLocked is the single doorway for daemon work that touches the
 	// sync repo: in-process mutex, then the cross-process lock (inside mu
 	// so this process never double-acquires it), then a fresh config load.
@@ -108,7 +85,7 @@ func Run() error {
 			if err != nil {
 				lg.Printf("reconcile: %v", err)
 			}
-			nudgeWatch()
+			poke(rewatch)
 		})
 		// The update runs AFTER the locks are released: the download needs
 		// neither, and holding them through a slow network would block
@@ -118,58 +95,67 @@ func Run() error {
 		}
 	}
 
-	// The startup pass runs in the background so the daemon is subscribed
-	// and watching from the first seconds: on a cold machine the first
-	// apply can take a while, and events arriving meanwhile just queue on
-	// the mutex.
-	go reconcile()
-
-	go watchFiles(ctx, lg, runLocked, rewatch)
-
+	// Passes run one at a time off this queue: a burst of nudges arriving
+	// while a pass runs adds at most one more, and the listener never
+	// blocks, which crosstalk would take as it being gone. An hour without
+	// a pass runs one anyway.
+	queued := make(chan struct{}, 1)
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case <-queued:
 			case <-time.After(pollInterval):
-				reconcile()
 			}
+			reconcile()
 		}
 	}()
 
-	// The topic is fixed for the daemon's lifetime (changing it needs a
-	// restart, which the KeepAlive'd launchd agent makes a kill away).
-	// Subscribe reconnects internally with backoff until ctx ends.
-	handle := func(ev events.Event) {
-		var n events.Nudge
-		json.Unmarshal([]byte(ev.Message), &n)
-		if n.Origin != "" && n.Origin == hostname {
-			// This machine's own push. The work is already done, but a
-			// CLI command may have added a path this daemon is not
-			// watching yet.
-			nudgeWatch()
-			return
+	// The startup pass waits for the listener's first word, which comes
+	// within seconds: a catch-up, or an error when crosstalk is not there.
+	// Starting sooner would queue a second pass right behind it. A hub
+	// that stays away holds it back for a minute at most.
+	var started atomic.Bool
+	startup := func() {
+		if !started.Swap(true) {
+			poke(queued)
 		}
-		lg.Printf("events: sync repo moved")
-		reconcile()
 	}
+	time.AfterFunc(time.Minute, startup)
+
+	go watchFiles(ctx, lg, runLocked, rewatch)
+
 	var lastErr string
-	events.Client{Server: cfg.Server(), Topic: cfg.Topic}.Subscribe(ctx,
-		func() {
-			lastErr = ""
-			lg.Printf("events: connected")
-		},
+	events.Listen(ctx,
 		func(err error) {
-			// Mask the topic: a net/url error embeds the full request
-			// URL, and the log is tailed by `lichen logs` and pasted.
+			startup()
 			if err.Error() != lastErr {
 				lastErr = err.Error()
-				lg.Printf("events: %s (retrying with backoff)", cfg.MaskTopic(err.Error()))
+				lg.Printf("events: %v (retrying with backoff, the hourly pass covers the gap)", err)
 			}
 		},
-		handle)
+		func() {
+			lastErr = ""
+			lg.Printf("events: connected, catching up")
+			started.Store(true)
+			poke(queued)
+		},
+		func(from string) {
+			lg.Printf("events: sync repo moved (pushed from %s)", from)
+			poke(queued)
+		})
 	lg.Printf("lichen stopped")
 	return nil
+}
+
+// poke signals ch without blocking: a full buffer already means the
+// signal is pending.
+func poke(ch chan<- struct{}) {
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
 }
 
 // updateBackoff spaces out failed auto-update attempts: the release
@@ -221,8 +207,9 @@ func autoUpdate(lg *log.Logger, repoV string) {
 // write-tmp-then-rename dance editors do), debounced, then re-add + commit
 // + push. The loop is self-settling: our own `chezmoi apply` fires events
 // too, but re-add of an unmodified file is a no-op and git has nothing to
-// commit.
-func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config.Config)), rewatch <-chan struct{}) {
+// commit. The sync repo's history is watched too: the managed set only
+// changes with a commit or pull there, including a CLI command's.
+func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config.Config)), rewatch chan struct{}) {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		lg.Printf("files: watcher: %v", err)
@@ -230,11 +217,18 @@ func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config
 	}
 	defer w.Close()
 
+	var history string
 	managed := map[string]bool{}
 	watchedDirs := map[string]bool{}
 	refresh := func() {
 		if !files.Active() {
 			return
+		}
+		if history == "" {
+			history, _ = files.HistoryPath()
+		}
+		if history != "" {
+			w.Add(filepath.Dir(history)) // retried on the next refresh until it exists
 		}
 		paths, err := files.Managed()
 		if err != nil {
@@ -248,7 +242,7 @@ func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config
 			dirs[filepath.Dir(f)] = true
 		}
 		for _, d := range w.WatchList() {
-			if !dirs[d] {
+			if !dirs[d] && (history == "" || d != filepath.Dir(history)) {
 				w.Remove(d)
 			}
 		}
@@ -272,6 +266,12 @@ func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config
 		case ev, ok := <-w.Events:
 			if !ok {
 				return
+			}
+			if history != "" && ev.Name == history {
+				if ev.Op&(fsnotify.Write|fsnotify.Create) != 0 {
+					poke(rewatch)
+				}
+				continue
 			}
 			// A watched dir DISAPPEARING matters too: deleting a whole
 			// synced directory can surface as one Remove for the dir,
@@ -297,12 +297,10 @@ func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config
 			// triggers the self-update here too (post-lock), so a machine
 			// whose user is actively editing does not wait for the hourly
 			// pass. The backoff keeps edit bursts from hammering it.
-			var shrunk bool
 			var repoV string
 			runLocked(func(c *config.Config) {
 				lg.Printf("files: local change: %v", paths)
-				var err error
-				if shrunk, err = files.LocalChange(c, lg, paths); err != nil {
+				if err := files.LocalChange(c, lg, paths); err != nil {
 					var outdated *files.OutdatedError
 					if errors.As(err, &outdated) {
 						repoV = outdated.Repo
@@ -322,11 +320,6 @@ func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config
 			})
 			if repoV != "" {
 				autoUpdate(lg, repoV)
-			}
-			// Only a propagated deletion shrinks the managed set. Plain
-			// edits don't need the watch list rebuilt.
-			if shrunk {
-				refresh()
 			}
 		}
 	}

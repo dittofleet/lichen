@@ -105,6 +105,16 @@ func Active() bool {
 	return err == nil
 }
 
+// HistoryPath is the sync repo's HEAD reflog, which grows with every
+// commit, pull or reset there, whoever makes it.
+func HistoryPath() (string, error) {
+	src, err := SourcePath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(src, ".git", "logs", "HEAD"), nil
+}
+
 // Origin returns the sync repo's remote URL ("" when none is set).
 func Origin() string {
 	src, err := SourcePath()
@@ -336,7 +346,7 @@ func Reconcile(cfg *config.Config, lg *log.Logger) error {
 			if _, err := gitutil.Run(src, "push", "--quiet"); err != nil {
 				lg.Printf("files: push: %v (will retry on next sync)", err)
 			} else {
-				announce(cfg, lg)
+				announce(lg)
 			}
 		}
 	}
@@ -553,19 +563,17 @@ func reAddPush(cfg *config.Config, lg *log.Logger, paths []string) error {
 
 // LocalChange handles paths the watcher saw change: files still present
 // are captured with re-add, files now missing are deleted everywhere
-// (see deletions.go). Reports whether the managed set changed, so the
-// watcher knows to rebuild its list.
-func LocalChange(cfg *config.Config, lg *log.Logger, paths []string) (bool, error) {
+// (see deletions.go).
+func LocalChange(cfg *config.Config, lg *log.Logger, paths []string) error {
 	if err := gate(); err != nil {
-		return false, err
+		return err
 	}
 	existing, missing := partitionExisting(paths)
 	var readdErr error
 	if len(existing) > 0 {
 		readdErr = reAddPush(cfg, lg, existing)
 	}
-	changed, propErr := propagateDeletions(cfg, lg, missing)
-	return changed, errors.Join(readdErr, propErr)
+	return errors.Join(readdErr, propagateDeletions(cfg, lg, missing))
 }
 
 // Sync starts managing new paths (chezmoi add) and pushes. With backups
@@ -721,25 +729,22 @@ func commitPush(cfg *config.Config, subject, body string, lg *log.Logger) error 
 				return gerr
 			}
 			if _, err2 := gitutil.Run(src, "push", "--quiet"); err2 == nil {
-				announce(cfg, lg)
+				announce(lg)
 				return nil
 			}
 		}
 		lg.Printf("files: push failed (will retry on next sync): %v", err)
 		return nil
 	}
-	announce(cfg, lg)
+	announce(lg)
 	return nil
 }
 
 // announce tells the other machines that the sync repo moved, so they
-// apply within seconds instead of waiting for their next hourly pass. The
-// sync repo's webhook does the same job for pushes lichen did not make.
+// apply within seconds instead of waiting for their next hourly pass.
 // Failure is not an error: the hourly pass is the backstop.
-func announce(cfg *config.Config, lg *log.Logger) {
-	host, _ := os.Hostname()
-	b, _ := json.Marshal(events.Nudge{Origin: host})
-	if err := (events.Client{Server: cfg.Server(), Topic: cfg.Topic}).Publish(string(b)); err != nil {
-		lg.Printf("files: event not published, other machines catch up on their next pass: %s", cfg.MaskTopic(err.Error()))
+func announce(lg *log.Logger) {
+	if err := events.Announce(); err != nil && !errors.Is(err, events.ErrNotRunning) {
+		lg.Printf("files: other machines not nudged, they catch up on their next pass: %v", err)
 	}
 }
