@@ -1,6 +1,6 @@
 // Package config defines lichen's config files under ~/.config/lichen,
-// one per owner: config.json (the event channel, seeded by the
-// installer), skills.json (skill sources, rewritten by the skills CLI)
+// one per owner: config.json (settings, seeded by the installer),
+// skills.json (skill sources, rewritten by the skills CLI)
 // and mcp.json (MCP servers, rewritten by the mcp CLI). All are synced
 // across machines, so everything in them is machine-portable, and an
 // apply can replace any of them with another machine's version.
@@ -17,12 +17,6 @@ import (
 )
 
 type Config struct {
-	NtfyServer string `json:"ntfy_server,omitempty"`
-	// Topic is the one event channel every machine shares: lichen's own
-	// push nudges and the sync repo's webhook both land here. The randomly
-	// generated topic is the channel's only secret. The JSON key is
-	// historical, kept so existing configs stay valid.
-	Topic string `json:"topic_prefix"`
 	// Backups keeps files lichen overwrites or deletes in
 	// ~/lichen-backups instead of removing them (see internal/backup).
 	Backups bool `json:"backups,omitempty"`
@@ -95,25 +89,7 @@ func Load() (*Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", p, err)
 	}
-	if cfg.Topic == "" {
-		return nil, fmt.Errorf("%s: topic_prefix is required", p)
-	}
 	return &cfg, nil
-}
-
-// Server resolves the default at point of use, so the config file stays
-// exactly what the user wrote.
-func (c *Config) Server() string {
-	if c.NtfyServer == "" {
-		return "https://ntfy.sh"
-	}
-	return strings.TrimRight(c.NtfyServer, "/")
-}
-
-// MaskTopic redacts the topic from s, for output that may be pasted or
-// logged (a net/url error embeds the whole request URL).
-func (c *Config) MaskTopic(s string) string {
-	return strings.ReplaceAll(s, c.Topic, "lichen-****")
 }
 
 func ExpandHome(p string) (string, error) {

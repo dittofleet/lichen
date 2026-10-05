@@ -1,14 +1,13 @@
 // Package daemon is lichen's long-running core: reconcile every module
-// on start, then react to the sync repo moving (via one idle ntfy
-// stream) and to local edits of managed files (via fsnotify). An hourly
-// pass is the backstop for events that never arrived, and doubles as the
-// skills module's poll of its upstream repos. Each pass re-reads the
-// config. Only the topic and server are fixed until restart.
+// on start, then react to the sync repo moving (via crosstalk nudges from
+// the other machines) and to local edits of managed files (via fsnotify).
+// An hourly pass is the backstop for events that never arrived, and
+// doubles as the skills module's poll of its upstream repos. Each pass
+// re-reads the config.
 package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log"
 	"maps"
@@ -31,9 +30,8 @@ import (
 	"lichen/internal/version"
 )
 
-// pollInterval catches whatever the event stream missed: a push that
-// happened while this machine was asleep, or a webhook that was never
-// configured.
+// pollInterval catches whatever the nudges missed: a push made outside
+// lichen, or one while crosstalk was not running here.
 const pollInterval = time.Hour
 
 func Run() error {
@@ -41,21 +39,7 @@ func Run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	cfg, err := config.Load()
-	if err != nil {
-		// A missing config must heal HERE too, not only inside a pass:
-		// returning would make launchd's KeepAlive crash-loop the daemon
-		// without a pass ever running. The restore needs the lock.
-		if release, lerr := proclock.Acquire(ctx, nil); lerr == nil {
-			cfg, err = files.LoadConfig(lg)
-			release()
-		}
-		if err != nil {
-			return err
-		}
-	}
-	lg.Printf("lichen %s starting (server %s)", version.Current, cfg.Server())
-	hostname, _ := os.Hostname()
+	lg.Printf("lichen %s starting", version.Current)
 
 	// One mutex serializes every pass: a startup pass, the hourly pass,
 	// watcher flushes, and event bursts must never run git or chezmoi
@@ -118,11 +102,31 @@ func Run() error {
 		}
 	}
 
-	// The startup pass runs in the background so the daemon is subscribed
+	// Event-driven passes run one at a time off this queue: a burst of
+	// nudges arriving while a pass runs adds at most one more, and the
+	// listener never blocks, which crosstalk would take as it being gone.
+	queued := make(chan struct{}, 1)
+	queue := func() {
+		select {
+		case queued <- struct{}{}:
+		default:
+		}
+	}
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-queued:
+				reconcile()
+			}
+		}
+	}()
+
+	// The startup pass runs in the background so the daemon is listening
 	// and watching from the first seconds: on a cold machine the first
-	// apply can take a while, and events arriving meanwhile just queue on
-	// the mutex.
-	go reconcile()
+	// apply can take a while.
+	queue()
 
 	go watchFiles(ctx, lg, runLocked, rewatch)
 
@@ -137,37 +141,23 @@ func Run() error {
 		}
 	}()
 
-	// The topic is fixed for the daemon's lifetime (changing it needs a
-	// restart, which the KeepAlive'd launchd agent makes a kill away).
-	// Subscribe reconnects internally with backoff until ctx ends.
-	handle := func(ev events.Event) {
-		var n events.Nudge
-		json.Unmarshal([]byte(ev.Message), &n)
-		if n.Origin != "" && n.Origin == hostname {
-			// This machine's own push. The work is already done, but a
-			// CLI command may have added a path this daemon is not
-			// watching yet.
-			nudgeWatch()
-			return
-		}
-		lg.Printf("events: sync repo moved")
-		reconcile()
-	}
 	var lastErr string
-	events.Client{Server: cfg.Server(), Topic: cfg.Topic}.Subscribe(ctx,
-		func() {
-			lastErr = ""
-			lg.Printf("events: connected")
-		},
+	events.Listen(ctx,
 		func(err error) {
-			// Mask the topic: a net/url error embeds the full request
-			// URL, and the log is tailed by `lichen logs` and pasted.
 			if err.Error() != lastErr {
 				lastErr = err.Error()
-				lg.Printf("events: %s (retrying with backoff)", cfg.MaskTopic(err.Error()))
+				lg.Printf("events: %v (retrying with backoff, the hourly pass covers the gap)", err)
 			}
 		},
-		handle)
+		func() {
+			lastErr = ""
+			lg.Printf("events: connected, catching up")
+			queue()
+		},
+		func(from string) {
+			lg.Printf("events: sync repo moved (pushed from %s)", from)
+			queue()
+		})
 	lg.Printf("lichen stopped")
 	return nil
 }
@@ -221,7 +211,8 @@ func autoUpdate(lg *log.Logger, repoV string) {
 // write-tmp-then-rename dance editors do), debounced, then re-add + commit
 // + push. The loop is self-settling: our own `chezmoi apply` fires events
 // too, but re-add of an unmodified file is a no-op and git has nothing to
-// commit.
+// commit. The manifest is watched too, so a path a CLI command starts
+// syncing is watched from then on.
 func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config.Config)), rewatch <-chan struct{}) {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -230,11 +221,15 @@ func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config
 	}
 	defer w.Close()
 
+	manifest, _ := files.ManifestPath()
 	managed := map[string]bool{}
 	watchedDirs := map[string]bool{}
 	refresh := func() {
 		if !files.Active() {
 			return
+		}
+		if manifest != "" {
+			w.Add(filepath.Dir(manifest)) // retried on the next refresh until it exists
 		}
 		paths, err := files.Managed()
 		if err != nil {
@@ -248,7 +243,7 @@ func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config
 			dirs[filepath.Dir(f)] = true
 		}
 		for _, d := range w.WatchList() {
-			if !dirs[d] {
+			if !dirs[d] && d != filepath.Dir(manifest) {
 				w.Remove(d)
 			}
 		}
@@ -272,6 +267,12 @@ func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config
 		case ev, ok := <-w.Events:
 			if !ok {
 				return
+			}
+			if ev.Name == manifest {
+				if ev.Op&(fsnotify.Write|fsnotify.Create) != 0 {
+					refresh()
+				}
+				continue
 			}
 			// A watched dir DISAPPEARING matters too: deleting a whole
 			// synced directory can surface as one Remove for the dir,

@@ -1,8 +1,8 @@
 // lichen keeps your dev machines in sync, one module per kind of thing:
 // files (dotfiles, slash commands, anything under your home directory),
 // agent skills installed from public repos, and MCP servers. One daemon
-// per machine, edits propagate within seconds via ntfy, skill repos are
-// polled.
+// per machine, edits propagate within seconds via crosstalk, skill repos
+// are polled.
 package main
 
 import (
@@ -24,7 +24,6 @@ import (
 	"lichen/internal/daemon"
 	"lichen/internal/events"
 	"lichen/internal/files"
-	"lichen/internal/gitutil"
 	"lichen/internal/mcp"
 	"lichen/internal/module"
 	"lichen/internal/proclock"
@@ -43,7 +42,7 @@ func main() {
 	var err error
 	switch args[0] {
 	case "status":
-		err = cmdStatus(slices.Contains(args[1:], "--secrets"))
+		err = cmdStatus()
 	case "sync":
 		err = cmdSyncCmd(args[1:])
 	case "skills":
@@ -132,8 +131,7 @@ func usage() {
   lichen mcp remove <name...>      stop syncing MCP servers (uninstalls them)
   lichen mcp list                  show every synced MCP server
 
-  lichen status [--secrets]        daemon health and webhook setup
-                                    (--secrets reveals the topic URL)
+  lichen status                    daemon health
   lichen logs                      tail the daemon log
   lichen start | stop | restart    control the background daemon
   lichen update                    self-update to the latest release
@@ -527,9 +525,8 @@ func cmdLogs() error {
 	return syscall.Exec(tail, []string{"tail", "-n", "50", "-F", p}, os.Environ())
 }
 
-func cmdStatus(showSecrets bool) error {
-	cfg, err := config.Load()
-	if err != nil {
+func cmdStatus() error {
+	if _, err := config.Load(); err != nil {
 		return err
 	}
 	state := launchdState()
@@ -539,13 +536,13 @@ func cmdStatus(showSecrets bool) error {
 		state = paint("33", state)
 	}
 	fmt.Printf("%s  %s\n", bold("daemon:"), state)
-	// The topic is the shared secret gating the event channel: shown only
-	// with --secrets so pasted status output leaks nothing.
-	note := ""
-	if showSecrets {
-		note = "  " + dim("(topic: "+cfg.Topic+")")
+	channel, ok := events.Status()
+	if ok {
+		channel = paint("32", channel)
+	} else {
+		channel = paint("33", channel+": other machines' changes arrive with the hourly pass")
 	}
-	fmt.Printf("%s  %s%s\n", bold("events:"), cfg.Server(), note)
+	fmt.Printf("%s  %s\n", bold("events:"), channel)
 	if p, err := config.LogPath(); err == nil {
 		fmt.Printf("%s     %s\n", bold("log:"), dim(p))
 	}
@@ -581,19 +578,6 @@ func cmdStatus(showSecrets bool) error {
 		fmt.Printf("\n%s %s\n", bold(fmt.Sprintf("mcp (%d servers):", len(entries))), strings.Join(names, ", "))
 	}
 
-	// The webhook is optional: lichen already nudges the other machines
-	// after its own pushes. It covers pushes made outside lichen, from the
-	// web UI or a machine without it.
-	if key, ok := gitutil.HostedKey(origin); ok {
-		url := events.Client{Server: cfg.Server(), Topic: cfg.Topic}.TopicURL()
-		header := "webhook (optional, for pushes made outside lichen):"
-		if !showSecrets {
-			url = cfg.MaskTopic(url)
-			header = "webhook (optional, for pushes made outside lichen, reveal with: lichen status --secrets):"
-		}
-		fmt.Printf("\n%s\n%s\n", bold(header),
-			fmt.Sprintf("  %s\n    → github.com/%s → Settings → Webhooks (push events, any content type)", url, key))
-	}
 	if backup.NonEmpty() {
 		if root, err := backup.Root(); err == nil {
 			fmt.Printf("\n%s\n", dim("backups of overwritten files exist in "+root))

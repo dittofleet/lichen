@@ -18,8 +18,11 @@ lichen is a pun on 'liken' and just how lichen behaves in general.
 ## Setup
 
 Prereqs on each machine: [Homebrew](https://brew.sh) (installs chezmoi),
-and git access that can clone the sync repo (SSH key or credentials,
-since the repo should be private).
+git access that can clone the sync repo (SSH key or credentials, since
+the repo should be private), and [crosstalk](https://github.com/dittofleet/crosstalk)
+joined to your hub. lichen nudges your other machines through crosstalk
+after each push, so they pull within seconds. Without it, and for pushes
+made outside lichen, machines catch up on an hourly pass.
 
 Create an empty private repo once (the sync repo, e.g. `you/lichen-sync`),
 then on every machine:
@@ -54,7 +57,7 @@ To keep replaced and deleted files there as well, set `backups` in
 every machine):
 
 ```json
-{ "topic_prefix": "...", "backups": true }
+{ "backups": true }
 ```
 
 ## Skills

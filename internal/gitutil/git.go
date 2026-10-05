@@ -38,25 +38,3 @@ func Run(dir string, args ...string) (string, error) {
 	}
 	return out, nil
 }
-
-// HostedKey turns a remote URL into its "owner/repo" key, used to point at
-// the sync repo's webhook settings page. ok=false for a local path or
-// anything else without that shape.
-func HostedKey(remote string) (string, bool) {
-	s := strings.TrimSuffix(strings.TrimSpace(remote), ".git")
-	if !strings.Contains(s, "://") && !strings.Contains(s, "@") {
-		return "", false
-	}
-	if i := strings.Index(s, "://"); i >= 0 {
-		s = s[i+3:]
-	}
-	// scp-style syntax: git@host:owner/repo
-	if i := strings.Index(s, ":"); i >= 0 && !strings.Contains(s[:i], "/") {
-		s = s[i+1:]
-	}
-	parts := strings.Split(strings.Trim(s, "/"), "/")
-	if len(parts) < 2 {
-		return "", false
-	}
-	return strings.ToLower(parts[len(parts)-2] + "/" + parts[len(parts)-1]), true
-}

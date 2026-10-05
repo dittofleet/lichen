@@ -108,15 +108,11 @@ if [ "$HAS_CONFIG" = 1 ]; then
 fi
 
 # First machine only (a joining machine received its config above): seed
-# the starter config with a fresh event topic.
+# an empty starter config.
 if [ ! -f "$CONFIG_FILE" ]; then
   mkdir -p "$HOME/.config/lichen"
-  TOPIC="lichen-$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c 12)"
-  printf '{\n  "topic_prefix": "%s"\n}\n' "$TOPIC" > "$CONFIG_FILE"
-  # The topic is a shared secret: keep the file out of other users' reach.
-  chmod 600 "$CONFIG_FILE"
+  printf '{}\n' > "$CONFIG_FILE"
   echo "Created starter config at $CONFIG_FILE" >&2
-  echo "  event topic: $TOPIC (a shared secret across your machines)" >&2
   echo "  It will sync to your other machines through the sync repo." >&2
 else
   echo "Config already exists at $CONFIG_FILE (left untouched)" >&2
@@ -160,3 +156,7 @@ EOF
 launchctl bootstrap "$GUI_DOMAIN" "$PLIST"
 echo "Daemon registered with launchd as $LABEL" >&2
 echo "Start syncing with 'lichen sync <path...>'." >&2
+command -v crosstalk >/dev/null 2>&1 || {
+  echo "crosstalk is not installed: changes from other machines arrive hourly" >&2
+  echo "  instead of within seconds. https://github.com/dittofleet/crosstalk" >&2
+}

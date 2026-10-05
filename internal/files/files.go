@@ -336,7 +336,7 @@ func Reconcile(cfg *config.Config, lg *log.Logger) error {
 			if _, err := gitutil.Run(src, "push", "--quiet"); err != nil {
 				lg.Printf("files: push: %v (will retry on next sync)", err)
 			} else {
-				announce(cfg, lg)
+				announce(lg)
 			}
 		}
 	}
@@ -721,25 +721,22 @@ func commitPush(cfg *config.Config, subject, body string, lg *log.Logger) error 
 				return gerr
 			}
 			if _, err2 := gitutil.Run(src, "push", "--quiet"); err2 == nil {
-				announce(cfg, lg)
+				announce(lg)
 				return nil
 			}
 		}
 		lg.Printf("files: push failed (will retry on next sync): %v", err)
 		return nil
 	}
-	announce(cfg, lg)
+	announce(lg)
 	return nil
 }
 
 // announce tells the other machines that the sync repo moved, so they
-// apply within seconds instead of waiting for their next hourly pass. The
-// sync repo's webhook does the same job for pushes lichen did not make.
+// apply within seconds instead of waiting for their next hourly pass.
 // Failure is not an error: the hourly pass is the backstop.
-func announce(cfg *config.Config, lg *log.Logger) {
-	host, _ := os.Hostname()
-	b, _ := json.Marshal(events.Nudge{Origin: host})
-	if err := (events.Client{Server: cfg.Server(), Topic: cfg.Topic}).Publish(string(b)); err != nil {
-		lg.Printf("files: event not published, other machines catch up on their next pass: %s", cfg.MaskTopic(err.Error()))
+func announce(lg *log.Logger) {
+	if err := events.Announce(); err != nil {
+		lg.Printf("files: other machines not nudged, they catch up on their next pass: %v", err)
 	}
 }
