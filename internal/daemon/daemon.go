@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -111,17 +112,24 @@ func Run() error {
 		}
 	}()
 
-	// The startup pass runs in the background so the daemon is listening
-	// and watching from the first seconds: on a cold machine the first
-	// apply can take a while. The listener's first catch-up queues one
-	// more, for pushes made while this one was starting.
-	poke(queued)
+	// The startup pass waits for the listener's first word, which comes
+	// within seconds: a catch-up, or an error when crosstalk is not there.
+	// Starting sooner would queue a second pass right behind it. A hub
+	// that stays away holds it back for a minute at most.
+	var started atomic.Bool
+	startup := func() {
+		if !started.Swap(true) {
+			poke(queued)
+		}
+	}
+	time.AfterFunc(time.Minute, startup)
 
 	go watchFiles(ctx, lg, runLocked, rewatch)
 
 	var lastErr string
 	events.Listen(ctx,
 		func(err error) {
+			startup()
 			if err.Error() != lastErr {
 				lastErr = err.Error()
 				lg.Printf("events: %v (retrying with backoff, the hourly pass covers the gap)", err)
@@ -130,6 +138,7 @@ func Run() error {
 		func() {
 			lastErr = ""
 			lg.Printf("events: connected, catching up")
+			started.Store(true)
 			poke(queued)
 		},
 		func(from string) {
@@ -198,8 +207,8 @@ func autoUpdate(lg *log.Logger, repoV string) {
 // write-tmp-then-rename dance editors do), debounced, then re-add + commit
 // + push. The loop is self-settling: our own `chezmoi apply` fires events
 // too, but re-add of an unmodified file is a no-op and git has nothing to
-// commit. The manifest is watched too: it changes whenever the managed set
-// does, including when a CLI command starts syncing a path.
+// commit. The sync repo's history is watched too: the managed set only
+// changes with a commit or pull there, including a CLI command's.
 func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config.Config)), rewatch chan struct{}) {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -208,16 +217,18 @@ func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config
 	}
 	defer w.Close()
 
-	manifest, _ := files.ManifestPath()
-	manifestDir := filepath.Dir(manifest)
+	var history string
 	managed := map[string]bool{}
 	watchedDirs := map[string]bool{}
 	refresh := func() {
 		if !files.Active() {
 			return
 		}
-		if manifest != "" {
-			w.Add(manifestDir) // retried on the next refresh until it exists
+		if history == "" {
+			history, _ = files.HistoryPath()
+		}
+		if history != "" {
+			w.Add(filepath.Dir(history)) // retried on the next refresh until it exists
 		}
 		paths, err := files.Managed()
 		if err != nil {
@@ -231,7 +242,7 @@ func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config
 			dirs[filepath.Dir(f)] = true
 		}
 		for _, d := range w.WatchList() {
-			if !dirs[d] && d != manifestDir {
+			if !dirs[d] && (history == "" || d != filepath.Dir(history)) {
 				w.Remove(d)
 			}
 		}
@@ -256,7 +267,7 @@ func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config
 			if !ok {
 				return
 			}
-			if ev.Name == manifest {
+			if history != "" && ev.Name == history {
 				if ev.Op&(fsnotify.Write|fsnotify.Create) != 0 {
 					poke(rewatch)
 				}

@@ -105,6 +105,16 @@ func Active() bool {
 	return err == nil
 }
 
+// HistoryPath is the sync repo's HEAD reflog, which grows with every
+// commit, pull or reset there, whoever makes it.
+func HistoryPath() (string, error) {
+	src, err := SourcePath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(src, ".git", "logs", "HEAD"), nil
+}
+
 // Origin returns the sync repo's remote URL ("" when none is set).
 func Origin() string {
 	src, err := SourcePath()
@@ -734,7 +744,7 @@ func commitPush(cfg *config.Config, subject, body string, lg *log.Logger) error 
 // apply within seconds instead of waiting for their next hourly pass.
 // Failure is not an error: the hourly pass is the backstop.
 func announce(lg *log.Logger) {
-	if err := events.Announce(); err != nil {
+	if err := events.Announce(); err != nil && !errors.Is(err, events.ErrNotRunning) {
 		lg.Printf("files: other machines not nudged, they catch up on their next pass: %v", err)
 	}
 }

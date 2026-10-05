@@ -26,6 +26,10 @@ import (
 // name is the crosstalk message name lichen sends and listens on.
 const name = "lichen"
 
+// ErrNotRunning means there is no crosstalk daemon on this machine to talk
+// to, as when crosstalk is not installed.
+var ErrNotRunning = errors.New("crosstalk is not running (is it installed and joined to a hub?)")
+
 // socketPath is where the crosstalk daemon listens, resolved the way
 // crosstalk itself does.
 func socketPath() (string, error) {
@@ -69,10 +73,12 @@ func open(ctx context.Context, req request, answer any) (net.Conn, *bufio.Scanne
 	c, err := d.DialContext(ctx, "unix", sock)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {
-			return nil, nil, errors.New("crosstalk is not running (is it installed and joined to a hub?)")
+			return nil, nil, ErrNotRunning
 		}
 		return nil, nil, err
 	}
+	stop := context.AfterFunc(ctx, func() { c.Close() })
+	defer stop()
 	b, _ := json.Marshal(req)
 	deadline, ok := ctx.Deadline()
 	if !ok {

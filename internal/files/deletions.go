@@ -120,9 +120,7 @@ func pruneDeletionLog(src string, absPaths []string) error {
 
 // The manifest is this machine's record of the managed files it saw on
 // its previous pass, the baseline that departures are computed against.
-// It also grows when a CLI command starts syncing a path, which is how the
-// daemon learns to watch it.
-func ManifestPath() (string, error) {
+func manifestPath() (string, error) {
 	d, err := config.DataDir()
 	if err != nil {
 		return "", err
@@ -135,7 +133,7 @@ func ManifestPath() (string, error) {
 // way, it is the direction that deletes nothing. (A DataDir failure also
 // lands here and resurfaces from the saveManifest that follows.)
 func loadManifest() ([]string, bool) {
-	p, err := ManifestPath()
+	p, err := manifestPath()
 	if err != nil {
 		return nil, false
 	}
@@ -151,7 +149,7 @@ func loadManifest() ([]string, bool) {
 }
 
 func saveManifest(paths []string) error {
-	p, err := ManifestPath()
+	p, err := manifestPath()
 	if err != nil {
 		return err
 	}
