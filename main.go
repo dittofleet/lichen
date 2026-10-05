@@ -526,6 +526,8 @@ func cmdLogs() error {
 }
 
 func cmdStatus() error {
+	// Nothing in the config is shown, but a missing one means lichen was
+	// never set up here.
 	if _, err := config.Load(); err != nil {
 		return err
 	}

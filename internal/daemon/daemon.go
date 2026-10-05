@@ -43,18 +43,10 @@ func Run() error {
 
 	// One mutex serializes every pass: a startup pass, the hourly pass,
 	// watcher flushes, and event bursts must never run git or chezmoi
-	// concurrently. rewatch nudges the file watcher to refresh its list
+	// concurrently. rewatch asks the file watcher to refresh its list
 	// whenever the managed set may have changed.
 	var mu sync.Mutex
 	rewatch := make(chan struct{}, 1)
-	// nudgeWatch asks the file watcher to refresh its managed-path list.
-	// Non-blocking: a full buffer already means a refresh is pending.
-	nudgeWatch := func() {
-		select {
-		case rewatch <- struct{}{}:
-		default:
-		}
-	}
 	// runLocked is the single doorway for daemon work that touches the
 	// sync repo: in-process mutex, then the cross-process lock (inside mu
 	// so this process never double-acquires it), then a fresh config load.
@@ -92,7 +84,7 @@ func Run() error {
 			if err != nil {
 				lg.Printf("reconcile: %v", err)
 			}
-			nudgeWatch()
+			poke(rewatch)
 		})
 		// The update runs AFTER the locks are released: the download needs
 		// neither, and holding them through a slow network would block
@@ -102,44 +94,30 @@ func Run() error {
 		}
 	}
 
-	// Event-driven passes run one at a time off this queue: a burst of
-	// nudges arriving while a pass runs adds at most one more, and the
-	// listener never blocks, which crosstalk would take as it being gone.
+	// Passes run one at a time off this queue: a burst of nudges arriving
+	// while a pass runs adds at most one more, and the listener never
+	// blocks, which crosstalk would take as it being gone. An hour without
+	// a pass runs one anyway.
 	queued := make(chan struct{}, 1)
-	queue := func() {
-		select {
-		case queued <- struct{}{}:
-		default:
-		}
-	}
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-queued:
-				reconcile()
+			case <-time.After(pollInterval):
 			}
+			reconcile()
 		}
 	}()
 
 	// The startup pass runs in the background so the daemon is listening
 	// and watching from the first seconds: on a cold machine the first
-	// apply can take a while.
-	queue()
+	// apply can take a while. The listener's first catch-up queues one
+	// more, for pushes made while this one was starting.
+	poke(queued)
 
 	go watchFiles(ctx, lg, runLocked, rewatch)
-
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(pollInterval):
-				reconcile()
-			}
-		}
-	}()
 
 	var lastErr string
 	events.Listen(ctx,
@@ -152,14 +130,23 @@ func Run() error {
 		func() {
 			lastErr = ""
 			lg.Printf("events: connected, catching up")
-			queue()
+			poke(queued)
 		},
 		func(from string) {
 			lg.Printf("events: sync repo moved (pushed from %s)", from)
-			queue()
+			poke(queued)
 		})
 	lg.Printf("lichen stopped")
 	return nil
+}
+
+// poke signals ch without blocking: a full buffer already means the
+// signal is pending.
+func poke(ch chan<- struct{}) {
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
 }
 
 // updateBackoff spaces out failed auto-update attempts: the release
@@ -211,9 +198,9 @@ func autoUpdate(lg *log.Logger, repoV string) {
 // write-tmp-then-rename dance editors do), debounced, then re-add + commit
 // + push. The loop is self-settling: our own `chezmoi apply` fires events
 // too, but re-add of an unmodified file is a no-op and git has nothing to
-// commit. The manifest is watched too, so a path a CLI command starts
-// syncing is watched from then on.
-func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config.Config)), rewatch <-chan struct{}) {
+// commit. The manifest is watched too: it changes whenever the managed set
+// does, including when a CLI command starts syncing a path.
+func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config.Config)), rewatch chan struct{}) {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		lg.Printf("files: watcher: %v", err)
@@ -222,6 +209,7 @@ func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config
 	defer w.Close()
 
 	manifest, _ := files.ManifestPath()
+	manifestDir := filepath.Dir(manifest)
 	managed := map[string]bool{}
 	watchedDirs := map[string]bool{}
 	refresh := func() {
@@ -229,7 +217,7 @@ func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config
 			return
 		}
 		if manifest != "" {
-			w.Add(filepath.Dir(manifest)) // retried on the next refresh until it exists
+			w.Add(manifestDir) // retried on the next refresh until it exists
 		}
 		paths, err := files.Managed()
 		if err != nil {
@@ -243,7 +231,7 @@ func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config
 			dirs[filepath.Dir(f)] = true
 		}
 		for _, d := range w.WatchList() {
-			if !dirs[d] && d != filepath.Dir(manifest) {
+			if !dirs[d] && d != manifestDir {
 				w.Remove(d)
 			}
 		}
@@ -270,7 +258,7 @@ func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config
 			}
 			if ev.Name == manifest {
 				if ev.Op&(fsnotify.Write|fsnotify.Create) != 0 {
-					refresh()
+					poke(rewatch)
 				}
 				continue
 			}
@@ -298,12 +286,10 @@ func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config
 			// triggers the self-update here too (post-lock), so a machine
 			// whose user is actively editing does not wait for the hourly
 			// pass. The backoff keeps edit bursts from hammering it.
-			var shrunk bool
 			var repoV string
 			runLocked(func(c *config.Config) {
 				lg.Printf("files: local change: %v", paths)
-				var err error
-				if shrunk, err = files.LocalChange(c, lg, paths); err != nil {
+				if err := files.LocalChange(c, lg, paths); err != nil {
 					var outdated *files.OutdatedError
 					if errors.As(err, &outdated) {
 						repoV = outdated.Repo
@@ -323,11 +309,6 @@ func watchFiles(ctx context.Context, lg *log.Logger, runLocked func(func(*config
 			})
 			if repoV != "" {
 				autoUpdate(lg, repoV)
-			}
-			// Only a propagated deletion shrinks the managed set. Plain
-			// edits don't need the watch list rebuilt.
-			if shrunk {
-				refresh()
 			}
 		}
 	}

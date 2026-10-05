@@ -553,19 +553,17 @@ func reAddPush(cfg *config.Config, lg *log.Logger, paths []string) error {
 
 // LocalChange handles paths the watcher saw change: files still present
 // are captured with re-add, files now missing are deleted everywhere
-// (see deletions.go). Reports whether the managed set changed, so the
-// watcher knows to rebuild its list.
-func LocalChange(cfg *config.Config, lg *log.Logger, paths []string) (bool, error) {
+// (see deletions.go).
+func LocalChange(cfg *config.Config, lg *log.Logger, paths []string) error {
 	if err := gate(); err != nil {
-		return false, err
+		return err
 	}
 	existing, missing := partitionExisting(paths)
 	var readdErr error
 	if len(existing) > 0 {
 		readdErr = reAddPush(cfg, lg, existing)
 	}
-	changed, propErr := propagateDeletions(cfg, lg, missing)
-	return changed, errors.Join(readdErr, propErr)
+	return errors.Join(readdErr, propagateDeletions(cfg, lg, missing))
 }
 
 // Sync starts managing new paths (chezmoi add) and pushes. With backups

@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"lichen/internal/config"
 )
 
 // name is the crosstalk message name lichen sends and listens on.
@@ -30,11 +32,7 @@ func socketPath() (string, error) {
 	if v := os.Getenv("XDG_DATA_HOME"); v != "" {
 		return filepath.Join(v, "crosstalk", "sock"), nil
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".local", "share", "crosstalk", "sock"), nil
+	return config.HomeJoin(".local", "share", "crosstalk", "sock")
 }
 
 type request struct {
@@ -46,7 +44,6 @@ type request struct {
 
 type response struct {
 	OK      bool   `json:"ok"`
-	Error   string `json:"error"`
 	Message string `json:"message"`
 }
 
@@ -61,7 +58,8 @@ type line struct {
 
 // open connects to the crosstalk daemon and sends req, returning the
 // connection and a scanner positioned after the daemon's answer. A
-// non-nil answer also receives that answer line.
+// non-nil answer also receives that answer line. ctx's deadline, or ten
+// seconds, bounds getting that answer.
 func open(ctx context.Context, req request, answer any) (net.Conn, *bufio.Scanner, error) {
 	sock, err := socketPath()
 	if err != nil {
@@ -76,7 +74,11 @@ func open(ctx context.Context, req request, answer any) (net.Conn, *bufio.Scanne
 		return nil, nil, err
 	}
 	b, _ := json.Marshal(req)
-	c.SetDeadline(time.Now().Add(10 * time.Second))
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(10 * time.Second)
+	}
+	c.SetDeadline(deadline)
 	if _, err := c.Write(append(b, '\n')); err != nil {
 		c.Close()
 		return nil, nil, err
