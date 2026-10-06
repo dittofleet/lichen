@@ -15,28 +15,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # Checked via the API so no git credentials are ever persisted into
-      # the checkout that later runs the signing steps.
-      - name: Ensure release tag is on main
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          STATUS=$(gh api "repos/${{ github.repository }}/compare/main...${{ github.sha }}" --jq .status)
-          if [ "$STATUS" != "identical" ] && [ "$STATUS" != "behind" ]; then
-            echo "Release tag must point to a commit on main (got: $STATUS)."
-            exit 1
-          fi
-
-      # The tag is stamped into the binary via -ldflags, so keep the
-      # format uniform.
-      - name: Ensure tag is semver
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Tag '$TAG' is not vX.Y.Z."
-            exit 1
-          fi
+      - uses: dittofleet/.github/actions/check-release-tag@main
 
       - uses: actions/setup-go@v5
         with:
