@@ -19,6 +19,10 @@ import (
 	"strings"
 	"syscall"
 
+	kitupdate "github.com/dittofleet/go-cli-kit/selfupdate"
+	"github.com/dittofleet/go-cli-kit/updatecheck"
+
+	"lichen/internal/app"
 	"lichen/internal/backup"
 	"lichen/internal/config"
 	"lichen/internal/daemon"
@@ -39,6 +43,12 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+	lichen := app.New()
+	lichen.AfterUpdate = func() error {
+		restartDaemonIfLoaded()
+		return nil
+	}
+
 	var err error
 	switch args[0] {
 	case "status":
@@ -56,7 +66,7 @@ func main() {
 	case "start", "stop", "restart":
 		err = cmdDaemonCtl(args[0])
 	case "update":
-		err = cmdUpdate()
+		_, err = kitupdate.Run(lichen)
 	case "uninstall":
 		err = cmdUninstall(args[1:])
 	case "version", "--version":
@@ -77,6 +87,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("lichen: %v", err)
 	}
+	updatecheck.MaybeCheck(lichen, args[0])
 }
 
 // updateAndRerun installs the release the sync repo requires, restarts
@@ -668,40 +679,6 @@ func cmdDaemonCtl(action string) error {
 		}
 		fmt.Println("daemon restarted")
 	}
-	return nil
-}
-
-// cmdUpdate self-updates to the latest GitHub release: fetch the latest
-// tag, download this platform's asset, and rename it over the running
-// binary.
-func cmdUpdate() error {
-	if !version.IsRelease() {
-		return fmt.Errorf("dev build (built from source): update by re-running dev.sh, or install the released binary via install.sh")
-	}
-	fmt.Println("checking the latest release...")
-	tag, err := selfupdate.LatestTag()
-	if err != nil {
-		return err
-	}
-	switch {
-	case tag == version.Current:
-		fmt.Println("already at the latest release: " + version.Current)
-		return nil
-	case version.Compare(tag, version.Current) < 0:
-		// A rollback: the latest published release is now OLDER than this
-		// build, meaning a release was deleted. This command is the only
-		// way off a pulled build, so install it, but loudly: the sync
-		// repo's marker may still require the deleted version and needs
-		// lowering by hand.
-		fmt.Printf("latest release %s is older than this build (%s): a release was deleted, downgrading.\n", tag, version.Current)
-		fmt.Printf("If syncing pauses afterwards, lower %s in the sync repo to %s or below.\n", version.Marker, tag)
-	}
-	fmt.Printf("downloading %s...\n", tag)
-	if err := selfupdate.Install(tag); err != nil {
-		return err
-	}
-	fmt.Printf("updated %s -> %s\n", version.Current, tag)
-	restartDaemonIfLoaded()
 	return nil
 }
 

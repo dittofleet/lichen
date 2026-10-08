@@ -133,7 +133,11 @@ Servers that need API keys, headers or a login aren't supported.
 
 ## Updates
 
-`lichen update` installs the latest release. The sync repo records the
-newest lichen version that has synced with it, and a machine running an
-older build pauses syncing and updates itself automatically, so
-updating one machine brings the whole fleet along.
+lichen updates itself: at most once a day, after a command, it installs a
+newer release if one is out and restarts the daemon. It skips the check
+when `CI` or `LICHEN_NO_UPDATE_CHECK` is set or stderr is not a terminal.
+`lichen update` does the same right away.
+
+The sync repo also records the newest lichen version that has synced with
+it, and a machine running an older build pauses syncing and updates itself
+straight away, so updating one machine brings the whole fleet along.
