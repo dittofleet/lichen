@@ -1,9 +1,7 @@
-// Package config defines lichen's config files under ~/.config/lichen,
-// one per owner: config.json (settings, seeded by the installer),
-// skills.json (skill sources, rewritten by the skills CLI)
-// and mcp.json (MCP servers, rewritten by the mcp CLI). All are synced
-// across machines, so everything in them is machine-portable, and an
-// apply can replace any of them with another machine's version.
+// Package config resolves where lichen keeps things on this machine: the
+// sync folder (~/lichen, the git checkout every module's config and every
+// synced source lives in), machine-local state, and the daemon log. It
+// also holds the JSON helpers the modules share for their config files.
 package config
 
 import (
@@ -12,19 +10,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
-	"sync"
+
+	"github.com/dittofleet/go-cli-kit/xdg"
 )
 
-type Config struct {
-	// Backups keeps files lichen overwrites or deletes in
-	// ~/lichen-backups instead of removing them (see internal/backup).
-	Backups bool `json:"backups,omitempty"`
-}
-
-var homeOnce = sync.OnceValues(os.UserHomeDir)
-
-func Home() (string, error) { return homeOnce() }
+func Home() (string, error) { return os.UserHomeDir() }
 
 // HomeJoin resolves a path under the home directory.
 func HomeJoin(parts ...string) (string, error) {
@@ -35,61 +27,38 @@ func HomeJoin(parts ...string) (string, error) {
 	return filepath.Join(append([]string{home}, parts...)...), nil
 }
 
-func Path() (string, error) {
-	return HomeJoin(".config", "lichen", "config.json")
-}
-
-// SkillsPath is the skills module's config: which skill repos to sync.
-// A separate file so each synced config file has exactly one writer.
-func SkillsPath() (string, error) {
-	return HomeJoin(".config", "lichen", "skills.json")
-}
-
-// MCPPath is the mcp module's config: which MCP servers to install.
-func MCPPath() (string, error) {
-	return HomeJoin(".config", "lichen", "mcp.json")
-}
-
-// OwnedPaths are the config files lichen itself writes: the set the
-// files module keeps in the sync repo. Empty when home can't resolve.
-func OwnedPaths() []string {
-	var paths []string
-	for _, path := range []func() (string, error){Path, SkillsPath, MCPPath} {
-		if p, err := path(); err == nil {
-			paths = append(paths, p)
-		}
+// SyncDir is the sync folder: ~/lichen, or LICHEN_DIR.
+func SyncDir() (string, error) {
+	if d := os.Getenv("LICHEN_DIR"); d != "" {
+		return filepath.Abs(d)
 	}
-	return paths
+	return HomeJoin("lichen")
+}
+
+// SyncPath resolves a path inside the sync folder.
+func SyncPath(parts ...string) (string, error) {
+	dir, err := SyncDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(append([]string{dir}, parts...)...), nil
 }
 
 // DataDir holds lichen's machine-local state: the cross-process lock,
-// the managed-set manifest, the skills and mcp manifests, and the skill
-// repo clones.
+// each module's record of what it installed here, and the skill repo
+// clones.
 func DataDir() (string, error) {
-	return HomeJoin(".local", "share", "lichen")
+	if _, err := Home(); err != nil {
+		return "", err
+	}
+	return xdg.DataDir("lichen"), nil
 }
 
 func LogPath() (string, error) {
-	return HomeJoin("Library", "Logs", "lichen.log")
-}
-
-func Load() (*Config, error) {
-	p, err := Path()
-	if err != nil {
-		return nil, err
+	if runtime.GOOS == "darwin" {
+		return HomeJoin("Library", "Logs", "lichen.log")
 	}
-	data, err := os.ReadFile(p)
-	if os.IsNotExist(err) {
-		return nil, fmt.Errorf("no config at %s (run install.sh first)", p)
-	}
-	if err != nil {
-		return nil, err
-	}
-	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", p, err)
-	}
-	return &cfg, nil
+	return HomeJoin(".local", "state", "lichen", "lichen.log")
 }
 
 func ExpandHome(p string) (string, error) {
@@ -102,6 +71,40 @@ func ExpandHome(p string) (string, error) {
 	}
 	return p, nil
 }
+
+// Abs canonicalizes a user-supplied path: ~ expanded, made absolute.
+func Abs(p string) (string, error) {
+	abs, err := ExpandHome(p)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(abs)
+}
+
+// Within reports whether p is root or lies inside it. The separator
+// keeps ~/.zshrc.bak from counting as inside ~/.zshrc.
+func Within(p, root string) bool {
+	return p == root || strings.HasPrefix(p, root+string(filepath.Separator))
+}
+
+// Ignored names files that never sync, wherever they are: Finder's and
+// editors' droppings, and lichen's own half-written files. GitIgnore
+// says the same to git, for the sync folder.
+func Ignored(name string) bool {
+	switch {
+	case name == ".DS_Store", name == ".git", strings.HasSuffix(name, tmpSuffix),
+		strings.HasSuffix(name, ".swp"), strings.HasSuffix(name, ".swo"), strings.HasSuffix(name, ".swx"),
+		strings.HasSuffix(name, "~"), strings.HasPrefix(name, ".#"),
+		strings.HasPrefix(name, "#") && strings.HasSuffix(name, "#"):
+		return true
+	}
+	return false
+}
+
+const GitIgnore = ".DS_Store\n*" + tmpSuffix + "\n*.swp\n*.swo\n*.swx\n*~\n.#*\n#*#\n"
+
+// tmpSuffix marks a file WriteFile has not finished writing.
+const tmpSuffix = ".lichen-tmp"
 
 // ContractHome is ExpandHome's inverse: paths under the home directory
 // become ~/-relative (portable across machines), others pass through.
@@ -163,18 +166,27 @@ func SetJSONField(path, key string, v any) error {
 	return WriteJSON(path, raw)
 }
 
-// WriteJSON writes v as pretty JSON via a temp file and rename, so a
-// crash never leaves a half-written file behind.
+// WriteJSON writes v as pretty JSON.
 func WriteJSON(path string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
+	return WriteFile(path, append(data, '\n'), 0o644)
+}
+
+// WriteFile writes data via a temp file and rename, so a crash never
+// leaves a half-written file behind, creating parent directories.
+func WriteFile(path string, data []byte, perm os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+	tmp := path + tmpSuffix
+	if err := os.WriteFile(tmp, data, perm); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, perm); err != nil {
+		os.Remove(tmp)
 		return err
 	}
 	return os.Rename(tmp, path)

@@ -7,8 +7,6 @@ import (
 	"os"
 	"slices"
 	"testing"
-
-	"lichen/internal/config"
 )
 
 // fake is an in-memory harness that records the calls it gets.
@@ -78,9 +76,8 @@ func TestValidate(t *testing.T) {
 func TestReconcile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	if h, _ := config.Home(); h != home {
-		t.Skip("home dir was resolved before this test, so it would be the real one")
-	}
+	t.Setenv("LICHEN_DIR", "")
+	t.Setenv("XDG_DATA_HOME", "")
 	claude := &fake{id: "claude", servers: map[string]Server{"mine": {Command: "own"}}}
 	codex := &fake{id: "codex", servers: map[string]Server{}}
 	harnesses = []harness{claude, codex}
@@ -160,7 +157,7 @@ func TestReconcile(t *testing.T) {
 	expect(codex, "remove mine")
 
 	// A config entry this build rejects keeps its installs.
-	p, _ := config.MCPPath()
+	p, _ := ConfigPath()
 	if err := os.WriteFile(p, []byte(`{"servers":{"pw":{}}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}

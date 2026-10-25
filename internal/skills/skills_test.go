@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
-
-	"lichen/internal/config"
 )
 
 func TestParseSpec(t *testing.T) {
@@ -185,9 +183,8 @@ func TestDiscoverRootSkill(t *testing.T) {
 func TestRunOnlyFor(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	if h, _ := config.Home(); h != home {
-		t.Skip("home dir was resolved before this test, so it would be the real one")
-	}
+	t.Setenv("LICHEN_DIR", "")
+	t.Setenv("XDG_DATA_HOME", "")
 	upstream := t.TempDir()
 	git := func(dir string, args ...string) {
 		t.Helper()
@@ -217,7 +214,7 @@ func TestRunOnlyFor(t *testing.T) {
 	git(home, "clone", "-q", upstream, filepath.Join(clones, cloneDirName("github.com/me/skills")))
 	writeConfig := func(cfg string) {
 		t.Helper()
-		p, _ := config.SkillsPath()
+		p, _ := ConfigPath()
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)
 		}

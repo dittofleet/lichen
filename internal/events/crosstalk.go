@@ -1,6 +1,6 @@
 // Package events is lichen's change-notification layer over crosstalk
-// (github.com/dittofleet/crosstalk), which links the user's Macs through
-// their own hub. lichen nudges every other connected machine whenever it
+// (github.com/dittofleet/crosstalk), which links the user's machines
+// through their own hub. lichen nudges every other connected machine whenever it
 // pushes the sync repo, and each daemon listens for those nudges on the
 // local crosstalk daemon's socket. crosstalk queues nothing, so a machine
 // that was asleep or offline is told when the hub is back instead, and
@@ -122,6 +122,43 @@ func Announce() error {
 		return err
 	}
 	return c.Close()
+}
+
+// Device is one machine on the crosstalk hub.
+type Device struct {
+	Name   string `json:"name"`
+	Online bool   `json:"online"`
+	Self   bool   `json:"self"`
+}
+
+// Devices lists the machines crosstalk knows, this one included.
+func Devices() ([]Device, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var res struct {
+		Devices []Device `json:"devices"`
+	}
+	c, _, err := open(ctx, request{Op: "devices"}, &res)
+	if err != nil {
+		return nil, err
+	}
+	c.Close()
+	return res.Devices, nil
+}
+
+// Self returns the name crosstalk knows this machine by, which is also
+// lichen's name for it.
+func Self() (string, error) {
+	devices, err := Devices()
+	if err != nil {
+		return "", err
+	}
+	for _, d := range devices {
+		if d.Self {
+			return d.Name, nil
+		}
+	}
+	return "", errors.New("crosstalk has not connected to its hub yet")
 }
 
 // Status describes the event channel for lichen status, and reports

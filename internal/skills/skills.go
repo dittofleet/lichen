@@ -7,9 +7,8 @@
 // limited to some harnesses (metadata.lichen-harnesses) lives in lichen's
 // private store instead, since some harnesses read ~/.agents/skills. WHICH
 // repos to sync and which harnesses to link live in this module's own
-// config file (~/.config/lichen/skills.json), which the files module
-// carries to every machine. Clones and install bookkeeping stay
-// machine-local. Only skills recorded in the local manifest are ever
+// config file (skills.json in the sync folder). Clones and install
+// bookkeeping stay machine-local. Only skills recorded in the local manifest are ever
 // touched, so skills installed by other means (npx skills, a manual
 // copy) always coexist with lichen's.
 package skills
@@ -27,8 +26,23 @@ import (
 	"time"
 
 	"lichen/internal/config"
+	"lichen/internal/core"
 	"lichen/internal/gitutil"
 )
+
+// ConfigFile is the module's config in the sync folder.
+const ConfigFile = "skills.json"
+
+// ConfigPath is where the module's config lives.
+func ConfigPath() (string, error) { return config.SyncPath(ConfigFile) }
+
+// Module is the skills module.
+type Module struct{}
+
+func (Module) Name() string   { return "skills" }
+func (Module) Config() string { return ConfigFile }
+
+func (Module) Reconcile(env *core.Env) error { return Reconcile(env.Log) }
 
 // pollEvery throttles upstream checks. Reconciles run much more often
 // than skill repos change (startup, every sync-repo event), and each
@@ -69,7 +83,7 @@ type skillsConfig struct {
 // caller tell "no file yet" (a fresh machine before its first sync, or
 // a file briefly moved aside) apart from a file that says no sources.
 func loadConfig() (cfg *skillsConfig, exists bool, err error) {
-	p, err := config.SkillsPath()
+	p, err := ConfigPath()
 	if err != nil {
 		return nil, false, err
 	}
@@ -118,13 +132,12 @@ func (c *skillsConfig) harnessDirs(lg *log.Logger) []string {
 // top-level field this build doesn't know about: the file is shared by
 // machines that may run different lichen versions.
 func saveSources(sources []Source) error {
-	p, err := config.SkillsPath()
+	p, err := ConfigPath()
 	if err != nil {
 		return err
 	}
 	if len(sources) == 0 {
-		// The file stays (deleting a managed file makes the files module
-		// restore it), just with no sources.
+		// The file stays, just with no sources.
 		return config.SetJSONField(p, "sources", nil)
 	}
 	return config.SetJSONField(p, "sources", sources)
@@ -617,10 +630,9 @@ func run(lg *log.Logger, force bool) error {
 	if len(sources) == 0 && len(man.Skills) == 0 && len(man.Repos) == 0 {
 		return nil
 	}
-	// An absent skills.json is not "zero sources": a fresh machine's
-	// first pass runs before the sync repo delivers the file, and an
-	// apply can briefly move it aside. Treating absence as emptiness
-	// would turn those windows into a mass uninstall.
+	// An absent skills.json is not "zero sources": a sync folder that
+	// lost it (a bad merge, a hand deletion) must not turn into a mass
+	// uninstall. Removing every source keeps the file, empty.
 	if !exists && len(man.Skills) > 0 {
 		lg.Printf("skills: no skills.json yet, leaving installed skills alone")
 		return nil
