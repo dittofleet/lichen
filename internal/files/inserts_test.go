@@ -208,6 +208,7 @@ func TestEditBeatsDeletionOfWhatItInserts(t *testing.T) {
 	a := newDevice(t, remote, "apple")
 	a.write(".config/zsh/main", "")
 	a.write(".config/zsh/part", "p1\n")
+	os.Chmod(a.path(".config/zsh/part"), 0o755)
 	a.add(".config/zsh")
 	a.write("lichen/files/config/zsh/main", "m1\n§ config/zsh/part\n")
 	a.sync()
@@ -221,6 +222,9 @@ func TestEditBeatsDeletionOfWhatItInserts(t *testing.T) {
 	expect(t, b, "lichen/files/config/zsh/main", "m1\n§ config/zsh/part\n")
 	expect(t, b, "lichen/files/config/zsh/part", "P1\n")
 	b.sync()
+	if fi, _ := os.Stat(b.path(".config/zsh/part")); fi.Mode().Perm()&0o100 == 0 {
+		t.Fatal("~/.config/zsh/part lost its executable bit")
+	}
 	a.sync()
 	expect(t, a, ".config/zsh/main", "m1\nP1\n")
 }
@@ -251,11 +255,13 @@ func TestEditBeatsDeletingAnInsert(t *testing.T) {
 // it waits for resolve instead.
 func TestEditToWhatIsNoLongerInserted(t *testing.T) {
 	a, b := zshDevices(t)
-	b.write("lichen/files/zshrc", "top\nc1\nc2\nend\n")
+	b.write("lichen/files/zshrc", "banana\nc1\nc2\nend\n")
 	b.sync()
-	a.write(".zshrc", "top\nAPPLE\nc2\nend\n")
+	// The edit to its own line clashes too, which keeping it would settle,
+	// but not the rest.
+	a.write(".zshrc", "apple\nAPPLE\nc2\nend\n")
 	a.sync()
-	expect(t, a, ".zshrc", "top\nAPPLE\nc2\nend\n")
+	expect(t, a, ".zshrc", "apple\nAPPLE\nc2\nend\n")
 	expect(t, a, "lichen/files/zsh/common", "c1\nc2\n")
 	a.use()
 	if h := files.Holds(); len(h) != 1 || !strings.Contains(h[0].Why, "no longer inserts zsh/common") {

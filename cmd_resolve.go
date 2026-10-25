@@ -69,7 +69,7 @@ func cmdResolve(args []string) error {
 			fmt.Println(dim("skipped"))
 			continue
 		}
-		if err := resolve(h.Path, keep, into); err != nil {
+		if err := resolve(h.Path, keep, into); err != nil && !errors.Is(err, files.ErrNotHeld) {
 			return err
 		}
 	}

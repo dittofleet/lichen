@@ -431,7 +431,8 @@ func (p *pass) release(ws map[string]want, dirs map[string]string) error {
 			delete(dead, rec.Source)
 		}
 		// What it was compiled from comes back as it was when last written
-		// here, to take the edit like any other.
+		// here, to take the edit like any other, executable as its output
+		// here is.
 		for f, h := range rec.Deps {
 			if _, err := os.Stat(sourcePath(p.env, f)); err == nil {
 				continue
@@ -440,7 +441,16 @@ func (p *pass) release(ws map[string]want, dirs map[string]string) error {
 			if err != nil {
 				return err
 			}
-			if err := writeFile(sourcePath(p.env, f), was, f == rec.File && isExec(out), false); err != nil {
+			exec := isExec(out)
+			if f != rec.File {
+				exec = false
+				for o, r := range p.st.Outputs {
+					if r.File == f {
+						exec = isExec(o)
+					}
+				}
+			}
+			if err := writeFile(sourcePath(p.env, f), was, exec, false); err != nil {
 				return err
 			}
 		}
@@ -566,12 +576,14 @@ func place(env *core.Env, rec *record, live []byte, into []string, ours bool) (m
 	if err != nil {
 		return nil, nil, conflict{fmt.Errorf("edited here, and its sources don't compile now: %w", err), false}
 	}
-	sources := map[string][]byte{}
-	for f, e := range edited {
-		cur, ok := now.deps[f]
-		if !ok {
+	for f := range edited {
+		if _, ok := now.deps[f]; !ok {
 			return nil, nil, conflict{fmt.Errorf("edited here, and it no longer inserts %s", f), false}
 		}
+	}
+	sources := map[string][]byte{}
+	for f, e := range edited {
+		cur := now.deps[f]
 		merged, ok := merge3(b.deps[f], e, cur, ours)
 		switch {
 		case ok:
