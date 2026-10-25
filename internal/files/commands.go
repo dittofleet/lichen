@@ -339,8 +339,10 @@ func Resolve(env *core.Env, p, keep string, into []string) error {
 		sources, open, err = place(env, rec, live, into, keep == "here")
 		var c conflict
 		switch {
-		case errors.As(err, &c):
+		case errors.As(err, &c) && c.keepable:
 			return fmt.Errorf("%s: %v (--keep here or --keep synced)", p, c)
+		case errors.As(err, &c):
+			return fmt.Errorf("%s: %v, so it can't be kept as it is (--keep synced, or edit its sources)", p, c)
 		case err != nil:
 			return err
 		case len(open) > 0:
@@ -360,23 +362,31 @@ type Question struct {
 	Sources []string
 }
 
+// Pending is what holds the edit at a held output.
+type Pending struct {
+	Questions []Question
+	Conflict  string // why it conflicts, if it does
+	Keepable  bool   // whether keeping it here would settle that
+}
+
 // Inspect says what holds the edit at a held output: the questions left
 // once into answers the first ones (as Resolve takes it), or with none
 // left, the conflict, if it is one.
-func Inspect(env *core.Env, p string, into []string) (questions []Question, conflicting string, err error) {
+func Inspect(env *core.Env, p string, into []string) (Pending, error) {
 	_, _, rec, live, err := held(p)
 	if err != nil {
-		return nil, "", err
+		return Pending{}, err
 	}
 	_, open, err := place(env, rec, live, into, false)
 	var c conflict
 	if errors.As(err, &c) {
-		return nil, c.Error(), nil
+		return Pending{Conflict: c.Error(), Keepable: c.keepable}, nil
 	}
+	var pd Pending
 	for _, q := range open {
-		questions = append(questions, Question{Lines: q.lines, Sources: sourcesOf(q)})
+		pd.Questions = append(pd.Questions, Question{Lines: q.lines, Sources: sourcesOf(q)})
 	}
-	return questions, "", err
+	return pd, err
 }
 
 // Diff shows how a held output differs from what its sources compile to.
@@ -396,6 +406,9 @@ func Diff(env *core.Env, p string, color bool) ([]byte, error) {
 	return gitDiff(map[string][]byte{"synced": c.content(), "here": live}, colors, "synced", "here")
 }
 
+// ErrNotHeld is an output that has nothing to resolve.
+var ErrNotHeld = errors.New("nothing to resolve")
+
 func held(p string) (abs string, st *state, rec *record, live []byte, err error) {
 	if abs, err = config.Abs(p); err != nil {
 		return
@@ -404,7 +417,7 @@ func held(p string) (abs string, st *state, rec *record, live []byte, err error)
 		return
 	}
 	if rec = st.Outputs[abs]; rec == nil || rec.Held == "" {
-		err = fmt.Errorf("%s has nothing to resolve", p)
+		err = fmt.Errorf("%s: %w", p, ErrNotHeld)
 		return
 	}
 	live, err = os.ReadFile(abs)
@@ -457,6 +470,24 @@ func Holds() []Hold {
 	for _, p := range slices.Sorted(maps.Keys(st.Outputs)) {
 		if r := st.Outputs[p]; r.Held != "" {
 			out = append(out, Hold{Path: config.ContractHome(p), Why: r.Held})
+		}
+	}
+	return out
+}
+
+// Broken lists this device's outputs whose sources don't compile (an
+// insert of a source that is gone, say), which stay as they are until
+// they do.
+func Broken(env *core.Env) []Hold {
+	c, err := loadConfig(env)
+	if err != nil {
+		return nil
+	}
+	ws, _ := wants(env, c, nil)
+	var out []Hold
+	for _, p := range slices.Sorted(maps.Keys(ws)) {
+		if _, err := build(env, ws[p].file); err != nil {
+			out = append(out, Hold{Path: config.ContractHome(p), Why: err.Error()})
 		}
 	}
 	return out

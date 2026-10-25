@@ -142,6 +142,12 @@ func cmdStatus() error {
 		}
 		fmt.Printf("%s %s\n", bold("mcp:"), strings.Join(names, ", "))
 	}
+	if broken := files.Broken(env); len(broken) > 0 {
+		fmt.Printf("\n%s not synced until their sources compile:\n", paint("31", "broken:"))
+		for _, b := range broken {
+			fmt.Printf("  %s  %s\n", b.Path, dim(b.Why))
+		}
+	}
 	if holds := files.Holds(); len(holds) > 0 {
 		fmt.Printf("\n%s edits here that lichen can't place on its own (lichen resolve):\n", paint("31", "waiting:"))
 		for _, h := range holds {

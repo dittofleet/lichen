@@ -246,7 +246,7 @@ func (p *pass) captureEdit(w want, rec *record, live []byte) error {
 		return nil
 	}
 	if err := take(p.env, p.st, w, sources, live); err != nil {
-		p.env.Log.Printf("files: %s: %v", config.ContractHome(w.path), err)
+		return err
 	}
 	if len(sources) > 0 {
 		p.note("edit " + config.ContractHome(w.path))
@@ -440,7 +440,7 @@ func (p *pass) release(ws map[string]want, dirs map[string]string) error {
 			if err != nil {
 				return err
 			}
-			if err := writeFile(sourcePath(p.env, f), was, f == rec.File && rec.Exec, false); err != nil {
+			if err := writeFile(sourcePath(p.env, f), was, f == rec.File && isExec(out), false); err != nil {
 				return err
 			}
 		}
@@ -514,8 +514,12 @@ func keptAt(to string) string {
 }
 
 // conflict is why an edit made here can't be taken into its sources as
-// it is.
-type conflict struct{ error }
+// it is. Keeping it anyway (`lichen resolve --keep here`) settles a merge
+// that clashes, but nothing else.
+type conflict struct {
+	error
+	keepable bool
+}
 
 // place works out what an edit to an output here makes of its sources:
 // the new content of each it changes, merged with whatever changed in
@@ -526,37 +530,47 @@ type conflict struct{ error }
 func place(env *core.Env, rec *record, live []byte, into []string, ours bool) (map[string][]byte, []question, error) {
 	b, err := base(rec)
 	if err != nil {
-		return nil, nil, conflict{fmt.Errorf("lichen can't tell what changed in it: %w", err)}
+		return nil, nil, conflict{fmt.Errorf("lichen can't tell what changed in it: %w", err), false}
 	}
-	// A file that inserts nothing, here or elsewhere, is its output.
-	plain := b.raw != nil || len(b.deps) == 1 && len(b.lines) == len(split(b.deps[rec.File]).lines)
 	var edited map[string][]byte
 	switch {
-	case plain:
+	case !b.inserts:
 		edited = map[string][]byte{rec.File: escape(live)}
 	case binary(live):
-		return nil, nil, conflict{errors.New("it isn't text now, and it inserts other sources")}
+		return nil, nil, conflict{errors.New("it isn't text now, and it inserts other sources"), false}
 	default:
 		var open []question
 		edited, open, err = unmap(b, split(live), chooser(into))
 		if errors.Is(err, errClash) {
-			return nil, nil, conflict{err}
+			return nil, nil, conflict{err, false}
 		}
 		if err != nil || len(open) > 0 {
 			return nil, open, err
 		}
 	}
+
+	// The sources as they are now, with any it edits that were deleted
+	// elsewhere back: an edit beats a deletion.
+	back := map[string][]byte{}
+	for f, e := range edited {
+		if _, err := os.Stat(sourcePath(env, f)); errors.Is(err, fs.ErrNotExist) {
+			back[f] = e
+		}
+	}
+	now, err := compile(rec.File, func(name string) ([]byte, error) {
+		if b, ok := back[name]; ok {
+			return b, nil
+		}
+		return os.ReadFile(sourcePath(env, name))
+	}, env.Device.Groups)
+	if err != nil {
+		return nil, nil, conflict{fmt.Errorf("edited here, and its sources don't compile now: %w", err), false}
+	}
 	sources := map[string][]byte{}
 	for f, e := range edited {
-		cur, err := os.ReadFile(sourcePath(env, f))
-		switch {
-		case errors.Is(err, fs.ErrNotExist) && ours:
-			sources[f] = e
-			continue
-		case errors.Is(err, fs.ErrNotExist):
-			return nil, nil, conflict{fmt.Errorf("edited here, and its source %s was deleted elsewhere", f)}
-		case err != nil:
-			return nil, nil, err
+		cur, ok := now.deps[f]
+		if !ok {
+			return nil, nil, conflict{fmt.Errorf("edited here, and it no longer inserts %s", f), false}
 		}
 		merged, ok := merge3(b.deps[f], e, cur, ours)
 		switch {
@@ -564,9 +578,9 @@ func place(env *core.Env, rec *record, live []byte, into []string, ours bool) (m
 		case ours:
 			merged = e
 		default:
-			return nil, nil, conflict{errors.New("edited here and on another device in the same place")}
+			return nil, nil, conflict{errors.New("edited here, and its sources elsewhere, in the same place"), true}
 		}
-		if !bytes.Equal(merged, cur) {
+		if _, gone := back[f]; gone || !bytes.Equal(merged, cur) {
 			sources[f] = merged
 		}
 	}

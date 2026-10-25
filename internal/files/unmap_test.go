@@ -97,6 +97,21 @@ func TestUnmap(t *testing.T) {
 	}
 }
 
+// An insert's last newline shows nowhere, so it always has one, which
+// keeps a last line that is blank.
+func TestUnmapKeepsBlankLastLines(t *testing.T) {
+	for _, tc := range []struct{ part, live, want string }{
+		{"\nx", "top\n\nend\n", "\n"},
+		{"x", "top\nx\n\nend\n", "x\n\n"},
+	} {
+		srcs := map[string]string{"zshrc": "top\n§ part\nend\n", "part": tc.part}
+		got, open, err := unmapped(t, srcs, tc.live, "part")
+		if err != nil || len(open) > 0 || got["part"] != tc.want {
+			t.Fatalf("part %q, output %q: sources = %q, %v, %v; want part %q", tc.part, tc.live, got, open, err, tc.want)
+		}
+	}
+}
+
 func TestUnmapAsks(t *testing.T) {
 	for name, live := range map[string]string{
 		"added after an insert":           "top\nc1\nc2\nnew\nend\n",

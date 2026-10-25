@@ -89,16 +89,17 @@ type pos struct {
 // compiled is one source file compiled for a device: the output, where
 // each of its lines came from, what each gap between them stands for in
 // the sources (gaps[i] being before line i, and holding every place a
-// line inserted there could go), and every source file read. A binary
-// file is copied as it is.
+// line inserted there could go), every source file read, and whether any
+// inserts another (here or not). A binary file is copied as it is.
 type compiled struct {
-	file   string
-	out    text
-	raw    []byte
-	lines  []pos
-	gaps   [][]pos
-	deps   map[string][]byte
-	groups []string
+	file    string
+	out     text
+	raw     []byte
+	lines   []pos
+	gaps    [][]pos
+	deps    map[string][]byte
+	inserts bool
+	groups  []string
 }
 
 func (c *compiled) content() []byte {
@@ -150,6 +151,7 @@ func compile(file string, read func(string) ([]byte, error), groups []string) (*
 				if err != nil {
 					return fmt.Errorf("%s line %d: %w", name, i+1, err)
 				}
+				c.inserts = true
 				if slices.Contains(chain, ins) {
 					return fmt.Errorf("inserts go in a circle: %s", strings.Join(append(chain, ins), " > "))
 				}

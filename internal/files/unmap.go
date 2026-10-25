@@ -88,10 +88,10 @@ func unmap(base *compiled, live text, choose func(question) (pos, bool)) (map[st
 	}
 	out := map[string][]byte{}
 	for f, e := range eds {
+		// The file's own last newline is the output's, and an insert's
+		// shows nowhere: it has one, for a last line that is blank.
 		t := e.apply(split(base.deps[f]))
-		if f == base.file {
-			t.eol = live.eol
-		}
+		t.eol = f != base.file || live.eol
 		if b := t.bytes(); !bytes.Equal(b, base.deps[f]) {
 			out[f] = b
 		}
@@ -117,9 +117,6 @@ func set(m map[int][]string, line int, lines []string) error {
 }
 
 func (e *edit) apply(t text) text {
-	if len(t.lines) == 0 {
-		t.eol = true
-	}
 	var out []string
 	for i, l := range t.lines {
 		out = append(out, e.ins[i]...)
@@ -188,12 +185,12 @@ func diff(old, new []string) ([]hunk, error) {
 	return hunks, nil
 }
 
-// gitDiff runs git diff --no-index on two of files, which tells a
-// difference apart from a failure by its exit code alone.
+// gitDiff runs git diff --no-index on two of files.
 func gitDiff(files map[string][]byte, args ...string) ([]byte, error) {
 	out, err := gitOn(files, append([]string{"--no-pager", "diff", "--no-index"}, args...)...)
+	// 1 is a difference, unless nothing says what it is.
 	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+	if errors.As(err, &exit) && exit.ExitCode() == 1 && len(out) > 0 {
 		err = nil
 	}
 	return out, err

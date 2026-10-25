@@ -87,9 +87,9 @@ func TestAmbiguousLinesWaitForResolve(t *testing.T) {
 	if h := files.Holds(); len(h) != 1 || !strings.Contains(h[0].Why, "which source") {
 		t.Fatalf("holds = %v, want a question", h)
 	}
-	qs, conflicting, err := files.Inspect(a.env(), a.path(".zshrc"), nil)
-	if err != nil || conflicting != "" || len(qs) != 1 || !slices.Equal(qs[0].Lines, []string{"new"}) || !slices.Equal(qs[0].Sources, []string{"zsh/common", "zshrc"}) {
-		t.Fatalf("inspect = %v, %q, %v", qs, conflicting, err)
+	pd, err := files.Inspect(a.env(), a.path(".zshrc"), nil)
+	if qs := pd.Questions; err != nil || pd.Conflict != "" || len(qs) != 1 || !slices.Equal(qs[0].Lines, []string{"new"}) || !slices.Equal(qs[0].Sources, []string{"zsh/common", "zshrc"}) {
+		t.Fatalf("inspect = %+v, %v", pd, err)
 	}
 
 	// Held: a change from elsewhere waits too.
@@ -223,4 +223,70 @@ func TestEditBeatsDeletionOfWhatItInserts(t *testing.T) {
 	b.sync()
 	a.sync()
 	expect(t, a, ".config/zsh/main", "m1\nP1\n")
+}
+
+// A source deleted elsewhere while the lines it inserts were edited here
+// comes back, edited, like a whole file would. Until then, the outputs
+// that insert it are broken.
+func TestEditBeatsDeletingAnInsert(t *testing.T) {
+	a, b := zshDevices(t)
+	os.Remove(b.path("lichen/files/zsh/common"))
+	b.sync()
+	expect(t, b, ".zshrc", "top\nc1\nc2\nend\n")
+	if br := files.Broken(b.env()); len(br) != 2 || !strings.Contains(br[0].Why, "no source zsh/common") {
+		t.Fatalf("broken = %v, want ~/.bashrc and ~/.zshrc", br)
+	}
+
+	a.write(".zshrc", "top\nC1\nc2\nend\n")
+	a.sync()
+	expect(t, a, "lichen/files/zsh/common", "C1\nc2\n")
+	b.sync()
+	expect(t, b, ".zshrc", "top\nC1\nc2\nend\n")
+	if br := files.Broken(b.env()); len(br) != 0 {
+		t.Fatalf("broken = %v after it came back", br)
+	}
+}
+
+// An edit to lines of an insert that is no longer inserted would be lost:
+// it waits for resolve instead.
+func TestEditToWhatIsNoLongerInserted(t *testing.T) {
+	a, b := zshDevices(t)
+	b.write("lichen/files/zshrc", "top\nc1\nc2\nend\n")
+	b.sync()
+	a.write(".zshrc", "top\nAPPLE\nc2\nend\n")
+	a.sync()
+	expect(t, a, ".zshrc", "top\nAPPLE\nc2\nend\n")
+	expect(t, a, "lichen/files/zsh/common", "c1\nc2\n")
+	a.use()
+	if h := files.Holds(); len(h) != 1 || !strings.Contains(h[0].Why, "no longer inserts zsh/common") {
+		t.Fatalf("holds = %v", h)
+	}
+	err := files.Resolve(a.env(), a.path(".zshrc"), "here", nil)
+	if err == nil || !strings.Contains(err.Error(), "can't be kept as it is") {
+		t.Fatalf("keep here: err = %v", err)
+	}
+}
+
+// Bringing back a file edited here while it was deleted elsewhere keeps
+// a chmod made with the edit.
+func TestEditBeatsDeletionKeepsTheMode(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write("bin/x", "v1\n")
+	a.add("bin/x")
+	b := newDevice(t, remote, "banana")
+	os.Remove(a.path("bin/x"))
+	a.sync()
+	b.write("bin/x", "v2\n")
+	os.Chmod(b.path("bin/x"), 0o755)
+	b.sync()
+	b.sync()
+	if fi, err := os.Stat(b.path("bin/x")); err != nil || fi.Mode().Perm()&0o100 == 0 {
+		t.Fatalf("~/bin/x lost its executable bit: %v, %v", fi.Mode(), err)
+	}
+	a.sync()
+	expect(t, a, "bin/x", "v2\n")
+	if fi, _ := os.Stat(a.path("bin/x")); fi.Mode().Perm()&0o100 == 0 {
+		t.Fatal("~/bin/x is not executable on apple")
+	}
 }

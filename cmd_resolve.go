@@ -14,7 +14,7 @@ import (
 	"lichen/internal/files"
 )
 
-const resolveUsage = "usage: lichen resolve [<path> [--keep here|synced] [--into <source>]]"
+const resolveUsage = "usage: lichen resolve [<path> [--keep here|synced] [--into <source>...]]"
 
 func cmdResolve(args []string) error {
 	var p, keep string
@@ -28,7 +28,7 @@ func cmdResolve(args []string) error {
 			if a == "--keep" {
 				keep = args[i]
 			} else {
-				into = []string{args[i]}
+				into = append(into, args[i])
 			}
 		default:
 			if strings.HasPrefix(a, "-") || p != "" {
@@ -59,6 +59,9 @@ func cmdResolve(args []string) error {
 	in := bufio.NewReader(os.Stdin)
 	for _, h := range holds {
 		keep, into, err := ask(env, in, h.Path)
+		if errors.Is(err, files.ErrNotHeld) {
+			continue // settled meanwhile
+		}
 		if err != nil {
 			return err
 		}
@@ -90,11 +93,11 @@ func resolve(p, keep string, into []string) error {
 // ask walks through what holds the edit at p: where its new lines go,
 // then whether it wins a conflict. Nothing (an empty answer) skips it.
 func ask(env *core.Env, in *bufio.Reader, p string) (keep string, into []string, err error) {
-	questions, conflicting, err := files.Inspect(env, p, nil)
+	pd, err := files.Inspect(env, p, nil)
 	if err != nil {
 		return "", nil, err
 	}
-	for _, q := range questions {
+	for _, q := range pd.Questions {
 		fmt.Printf("\n%s: which source do these new lines go in?\n", bold(p))
 		for _, l := range q.Lines {
 			fmt.Println(paint("32", "+ "+l))
@@ -102,7 +105,7 @@ func ask(env *core.Env, in *bufio.Reader, p string) (keep string, into []string,
 		for i, s := range q.Sources {
 			fmt.Printf("  %d  %s\n", i+1, s)
 		}
-		fmt.Printf("  d  drop them, for the synced version\n")
+		fmt.Printf("  d  drop every edit to this file, for the synced version\n")
 		a := prompt(in, fmt.Sprintf("1-%d or d: ", len(q.Sources)))
 		if a == "" {
 			return "", nil, nil
@@ -116,26 +119,31 @@ func ask(env *core.Env, in *bufio.Reader, p string) (keep string, into []string,
 		}
 		into = append(into, q.Sources[n-1])
 	}
-	if len(questions) > 0 {
-		if _, conflicting, err = files.Inspect(env, p, into); err != nil {
+	if len(pd.Questions) > 0 {
+		if pd, err = files.Inspect(env, p, into); err != nil {
 			return "", nil, err
 		}
 	}
-	if conflicting == "" {
+	if pd.Conflict == "" {
 		return "", into, nil
 	}
-	fmt.Printf("\n%s: %s\n", bold(p), conflicting)
-	if err := showDiff(env, p); err != nil {
-		return "", nil, err
+	fmt.Printf("\n%s: %s\n", bold(p), pd.Conflict)
+	d, err := files.Diff(env, p, useColor)
+	if err != nil {
+		fmt.Println(dim("(nothing to do here until its sources in ~/lichen/files compile)"))
+		return "", nil, nil
+	}
+	os.Stdout.Write(d)
+	q, answers := "keep (h)ere or (s)ynced: ", "hs"
+	if !pd.Keepable {
+		q, answers = "this edit can't be kept as it is: drop it for the (s)ynced version: ", "s"
 	}
 	for {
-		switch a := prompt(in, "keep (h)ere or (s)ynced: "); a {
-		case "":
+		switch a := prompt(in, q); {
+		case a == "":
 			return "", nil, nil
-		case "h", "here":
-			return "here", into, nil
-		case "s", "synced":
-			return "synced", into, nil
+		case len(a) == 1 && strings.Contains(answers, a):
+			return map[string]string{"h": "here", "s": "synced"}[a], into, nil
 		}
 	}
 }
@@ -145,14 +153,4 @@ func prompt(in *bufio.Reader, q string) string {
 	fmt.Print(q)
 	a, _ := in.ReadString('\n')
 	return strings.TrimSpace(a)
-}
-
-// showDiff shows how a held output differs from what its sources hold.
-func showDiff(env *core.Env, p string) error {
-	d, err := files.Diff(env, p, useColor)
-	if err != nil {
-		return err
-	}
-	_, err = os.Stdout.Write(d)
-	return err
 }
