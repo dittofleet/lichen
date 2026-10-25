@@ -9,55 +9,43 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
-	"strings"
 
 	"lichen/internal/config"
 	"lichen/internal/core"
 )
 
-// absPath canonicalizes a user-supplied path: ~ expanded, made absolute.
-func absPath(p string) (string, error) {
-	abs, err := config.ExpandHome(p)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Abs(abs)
-}
-
-// outputPath checks that p can be an output: under the home directory,
-// and outside lichen's own folders.
+// outputPath checks that p can be an output, and makes it absolute.
 func outputPath(env *core.Env, p string) (string, error) {
-	abs, err := absPath(p)
+	abs, err := config.Abs(p)
 	if err != nil {
 		return "", err
 	}
-	if config.ContractHome(abs) == abs || config.ContractHome(abs) == "~" {
-		return "", fmt.Errorf("%s is not inside your home directory: only files under ~ can sync", p)
-	}
-	data, _ := config.DataDir()
-	for _, own := range []string{env.Dir, data} {
-		if abs == own || strings.HasPrefix(abs, own+"/") || strings.HasPrefix(own, abs+"/") {
-			return "", fmt.Errorf("%s is lichen's own folder, it can't sync", config.ContractHome(abs))
-		}
-	}
-	return abs, nil
+	return abs, checkOutput(env, abs)
 }
 
 // owner finds the source with an output at or around abs, on any device.
 func owner(c *fileConfig, abs string) (name string, out Output, ok bool) {
 	for _, n := range slices.Sorted(maps.Keys(c.Sources)) {
 		for _, o := range c.Sources[n].To {
-			root, err := config.ExpandHome(o.Path)
-			if err != nil {
-				continue
-			}
-			root = filepath.Clean(root)
-			if abs == root || strings.HasPrefix(abs, root+"/") || strings.HasPrefix(root, abs+"/") {
+			if root, err := o.root(); err == nil && (config.Within(abs, root) || config.Within(root, abs)) {
 				return n, o, true
 			}
 		}
 	}
 	return "", Output{}, false
+}
+
+// outputAt finds the output at p exactly.
+func outputAt(c *fileConfig, p string) (name string, out Output, err error) {
+	abs, err := config.Abs(p)
+	if err != nil {
+		return "", Output{}, err
+	}
+	n, o, ok := owner(c, abs)
+	if root, _ := o.root(); !ok || root != abs {
+		return "", Output{}, fmt.Errorf("%s is not a source or an output (see: lichen files)", p)
+	}
+	return n, o, nil
 }
 
 // Add starts syncing files or directories: each becomes a source, with
@@ -127,7 +115,7 @@ func Add(env *core.Env, paths []string, name string, only []string) ([]string, e
 			if err := writeFile(sourcePath(env, file), content, isExec(out)); err != nil {
 				return nil, err
 			}
-			if err := st.remember(out, n, file, abs, content); err != nil {
+			if err := st.remember(want{source: n, file: file, path: out, root: abs, dir: rel != ""}, content); err != nil {
 				return nil, err
 			}
 		}
@@ -179,41 +167,27 @@ func Remove(env *core.Env, args []string) ([]string, error) {
 	var removed []string
 	for _, a := range args {
 		if _, ok := c.Sources[a]; ok {
-			delete(c.Sources, a)
-			if err := os.RemoveAll(sourcePath(env, a)); err != nil {
+			if err := dropSource(env, c, a); err != nil {
 				return nil, err
 			}
-			removeEmptyParents(filepath.Dir(sourcePath(env, a)), env.Path(SourcesDir))
 			removed = append(removed, a)
 			continue
 		}
-		abs, err := absPath(a)
+		n, o, err := outputAt(c, a)
 		if err != nil {
 			return nil, err
 		}
-		n, o, ok := owner(c, abs)
-		if !ok || filepath.Clean(mustExpand(o.Path)) != abs {
-			return nil, fmt.Errorf("%s is not a source or an output (see: lichen files)", a)
-		}
 		s := c.Sources[n]
 		s.To = slices.DeleteFunc(s.To, func(x Output) bool { return x.Path == o.Path })
-		if len(s.To) > 0 {
-			c.Sources[n] = s
-		} else {
-			delete(c.Sources, n)
-			if err := os.RemoveAll(sourcePath(env, n)); err != nil {
+		c.Sources[n] = s
+		if len(s.To) == 0 {
+			if err := dropSource(env, c, n); err != nil {
 				return nil, err
 			}
-			removeEmptyParents(filepath.Dir(sourcePath(env, n)), env.Path(SourcesDir))
 		}
 		removed = append(removed, o.Path)
 	}
 	return removed, c.save(env)
-}
-
-func mustExpand(p string) string {
-	abs, _ := config.ExpandHome(p)
-	return abs
 }
 
 // Only scopes outputs to devices and groups: one output by its path, or
@@ -228,24 +202,17 @@ func Only(env *core.Env, target string, groups []string) error {
 	if err != nil {
 		return err
 	}
-	if s, ok := c.Sources[target]; ok {
-		for i := range s.To {
-			s.To[i].Only = groups
+	n, only := target, ""
+	if _, ok := c.Sources[target]; !ok {
+		var o Output
+		if n, o, err = outputAt(c, target); err != nil {
+			return err
 		}
-		c.Sources[target] = s
-		return c.save(env)
-	}
-	abs, err := absPath(target)
-	if err != nil {
-		return err
-	}
-	n, o, ok := owner(c, abs)
-	if !ok || filepath.Clean(mustExpand(o.Path)) != abs {
-		return fmt.Errorf("%s is not a source or an output (see: lichen files)", target)
+		only = o.Path
 	}
 	s := c.Sources[n]
 	for i := range s.To {
-		if s.To[i].Path == o.Path {
+		if only == "" || s.To[i].Path == only {
 			s.To[i].Only = groups
 		}
 	}
@@ -277,18 +244,18 @@ func Recover(env *core.Env, args []string) ([]string, error) {
 			recovered = append(recovered, name)
 			continue
 		}
-		abs, err := absPath(a)
+		abs, err := config.Abs(a)
 		if err != nil {
 			return nil, err
 		}
 		n, o, ok := owner(c, abs)
-		root := filepath.Clean(mustExpand(o.Path))
+		root, _ := o.root()
 		if !ok || abs == root {
 			return nil, fmt.Errorf("nothing deleted at %s", a)
 		}
 		rel, _ := filepath.Rel(root, abs)
 		file := path.Join(SourcesDir, n, filepath.ToSlash(rel))
-		if err := restore(env, file); err != nil {
+		if _, err := restore(env, file); err != nil {
 			return nil, fmt.Errorf("nothing deleted at %s", a)
 		}
 		recovered = append(recovered, config.ContractHome(abs))
@@ -299,17 +266,17 @@ func Recover(env *core.Env, args []string) ([]string, error) {
 	return recovered, saveDeleted(env, dead)
 }
 
-func buriedAs(dead map[string]tombstone, a string) (string, bool) {
+func buriedAs(dead map[string][]string, a string) (string, bool) {
 	if _, ok := dead[a]; ok {
 		return a, true
 	}
-	abs, err := absPath(a)
+	abs, err := config.Abs(a)
 	if err != nil {
 		return "", false
 	}
-	for name, t := range dead {
-		for _, o := range t.Outputs {
-			if filepath.Clean(mustExpand(o)) == abs {
+	for name, outs := range dead {
+		for _, o := range outs {
+			if root, err := (Output{Path: o}).root(); err == nil && root == abs {
 				return name, true
 			}
 		}
@@ -320,12 +287,8 @@ func buriedAs(dead map[string]tombstone, a string) (string, bool) {
 // recoverSource restores a buried source and its files.json entry from
 // the commit before the one that deleted it.
 func recoverSource(env *core.Env, c *fileConfig, name string) error {
-	file := path.Join(SourcesDir, name)
-	commit, err := deletedIn(env, file)
+	commit, err := restore(env, path.Join(SourcesDir, name))
 	if err != nil {
-		return err
-	}
-	if _, err := env.Git("checkout", commit+"^", "--", file); err != nil {
 		return err
 	}
 	old, err := env.Git("show", commit+"^:"+ConfigFile)
@@ -344,13 +307,15 @@ func recoverSource(env *core.Env, c *fileConfig, name string) error {
 	return nil
 }
 
-func restore(env *core.Env, file string) error {
+// restore brings file back from just before the commit that deleted
+// it, which it returns.
+func restore(env *core.Env, file string) (string, error) {
 	commit, err := deletedIn(env, file)
 	if err != nil {
-		return err
+		return "", err
 	}
 	_, err = env.Git("checkout", commit+"^", "--", file)
-	return err
+	return commit, err
 }
 
 // deletedIn finds the commit that deleted file.
@@ -368,7 +333,10 @@ func deletedIn(env *core.Env, file string) (string, error) {
 // Resolve settles a conflicted output: keep "here" takes this device's
 // version into the source, keep "synced" overwrites it with the source.
 func Resolve(env *core.Env, p, keep string) error {
-	abs, err := absPath(p)
+	if keep != "here" && keep != "synced" {
+		return errors.New("--keep takes here or synced")
+	}
+	abs, err := config.Abs(p)
 	if err != nil {
 		return err
 	}
@@ -380,32 +348,19 @@ func Resolve(env *core.Env, p, keep string) error {
 	if rec == nil || !rec.Conflict {
 		return fmt.Errorf("%s has no conflict to resolve", p)
 	}
-	src := sourcePath(env, rec.File)
-	switch keep {
-	case "here":
-		live, err := os.ReadFile(abs)
-		if err != nil {
-			return err
-		}
-		if err := writeFile(src, live, isExec(abs)); err != nil {
-			return err
-		}
-		if err := st.remember(abs, rec.Source, rec.File, rec.Root, live); err != nil {
-			return err
-		}
-	case "synced":
-		content, err := os.ReadFile(src)
-		if err != nil {
-			return err
-		}
-		if err := writeFile(abs, content, isExec(src)); err != nil {
-			return err
-		}
-		if err := st.remember(abs, rec.Source, rec.File, rec.Root, content); err != nil {
-			return err
-		}
-	default:
-		return errors.New("--keep takes here or synced")
+	from, to := abs, sourcePath(env, rec.File)
+	if keep == "synced" {
+		from, to = to, from
+	}
+	content, err := os.ReadFile(from)
+	if err != nil {
+		return err
+	}
+	if err := writeFile(to, content, isExec(from)); err != nil {
+		return err
+	}
+	if err := st.remember(rec.want(abs), content); err != nil {
+		return err
 	}
 	return st.save()
 }

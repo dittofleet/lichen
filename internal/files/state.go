@@ -79,7 +79,7 @@ func hashOf(b []byte) string {
 
 // remember records content as what lichen wrote (or found in sync) at an
 // output, keeping the content for later comparisons.
-func (s *state) remember(out, source, file, root string, content []byte) error {
+func (s *state) remember(w want, content []byte) error {
 	d, err := stateDir()
 	if err != nil {
 		return err
@@ -94,8 +94,13 @@ func (s *state) remember(out, source, file, root string, content []byte) error {
 			return err
 		}
 	}
-	s.Outputs[out] = &record{Source: source, File: file, Root: root, Hash: h}
+	s.Outputs[w.path] = &record{Source: w.source, File: w.file, Root: w.root, Hash: h}
 	return nil
+}
+
+// want is what a record was written for, at out.
+func (r *record) want(out string) want {
+	return want{source: r.Source, file: r.File, path: out, root: r.Root, dir: r.Root != out}
 }
 
 // base returns what lichen last wrote at an output.

@@ -3,15 +3,8 @@
 // and restarted if it dies.
 package service
 
-import "os"
-
 // The daemon runs git and each harness's CLI (claude, codex), and finds
 // its folders through these, so a service started by launchd or systemd,
 // which know nothing of the shell's environment, is handed the installing
 // shell's values.
 var passedOn = []string{"PATH", "LICHEN_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME"}
-
-func home() string {
-	dir, _ := os.UserHomeDir()
-	return dir
-}

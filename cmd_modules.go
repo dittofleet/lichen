@@ -7,7 +7,6 @@ import (
 
 	"lichen/internal/core"
 	"lichen/internal/mcp"
-	"lichen/internal/module"
 	"lichen/internal/skills"
 )
 
@@ -51,11 +50,9 @@ func cmdSkillsAdd(args []string) error {
 		return fmt.Errorf("usage: lichen skills add <owner/repo> [--skill <name>]...")
 	}
 	var key string
-	err := withEnv(func(env *core.Env) error {
-		return module.Change(env, "skills: add "+repo, func() (err error) {
-			key, err = skills.AddSource(repo, only)
-			return err
-		})
+	err := change("skills: add "+repo, func(*core.Env) (err error) {
+		key, err = skills.AddSource(repo, only)
+		return err
 	})
 	if err != nil {
 		return err
@@ -82,10 +79,8 @@ func cmdSkillsRemove(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: lichen skills remove <repo|skill...>")
 	}
-	err := withEnv(func(env *core.Env) error {
-		return module.Change(env, "skills: remove "+strings.Join(args, " "), func() error {
-			return skills.RemoveSources(args)
-		})
+	err := change("skills: remove "+strings.Join(args, " "), func(*core.Env) error {
+		return skills.RemoveSources(args)
 	})
 	if err != nil {
 		return err
@@ -168,9 +163,7 @@ func cmdMCPAdd(args []string) error {
 		}
 		s = mcp.Server{URL: rest[0]}
 	}
-	err := withEnv(func(env *core.Env) error {
-		return module.Change(env, "mcp: add "+name, func() error { return mcp.AddServer(name, s) })
-	})
+	err := change("mcp: add "+name, func(*core.Env) error { return mcp.AddServer(name, s) })
 	if err != nil {
 		return err
 	}
@@ -195,9 +188,7 @@ func cmdMCPRemove(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: lichen mcp remove <name...>")
 	}
-	err := withEnv(func(env *core.Env) error {
-		return module.Change(env, "mcp: remove "+strings.Join(args, " "), func() error { return mcp.RemoveServers(args) })
-	})
+	err := change("mcp: remove "+strings.Join(args, " "), func(*core.Env) error { return mcp.RemoveServers(args) })
 	if err != nil {
 		return err
 	}

@@ -34,18 +34,13 @@ import (
 const ConfigFile = "skills.json"
 
 // ConfigPath is where the module's config lives.
-func ConfigPath() (string, error) {
-	dir, err := config.SyncDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, ConfigFile), nil
-}
+func ConfigPath() (string, error) { return config.SyncPath(ConfigFile) }
 
 // Module is the skills module.
 type Module struct{}
 
-func (Module) Name() string { return "skills" }
+func (Module) Name() string   { return "skills" }
+func (Module) Config() string { return ConfigFile }
 
 func (Module) Reconcile(env *core.Env) error { return Reconcile(env.Log) }
 

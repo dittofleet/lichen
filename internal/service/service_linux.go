@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/dittofleet/go-cli-kit/xdg"
+
 	"lichen/internal/config"
 )
 
@@ -16,7 +18,7 @@ import (
 const unit = "lichen.service"
 
 func unitPath() string {
-	return filepath.Join(home(), ".config", "systemd", "user", unit)
+	return filepath.Join(xdg.ConfigDir("systemd"), "user", unit)
 }
 
 func systemctl(args ...string) error {

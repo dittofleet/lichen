@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 
 	kitupdate "github.com/dittofleet/go-cli-kit/selfupdate"
@@ -168,6 +167,14 @@ func withEnv(fn func(env *core.Env) error) error {
 	})
 }
 
+// change runs a CLI edit through module.Change: on the freshest shared
+// state, committed under subject, and synced.
+func change(subject string, edit func(env *core.Env) error) error {
+	return withEnv(func(env *core.Env) error {
+		return module.Change(env, subject, func() error { return edit(env) })
+	})
+}
+
 // updateAndRerun installs the release the sync folder requires, restarts
 // the daemon on it, and execs the original command on the new binary.
 // The env guard is keyed to the requirement that triggered the update: a
@@ -226,10 +233,8 @@ func tilde(paths ...string) string {
 	out := make([]string, len(paths))
 	for i, p := range paths {
 		out[i] = p
-		if abs, err := config.ExpandHome(p); err == nil {
-			if abs, err = filepath.Abs(abs); err == nil {
-				out[i] = config.ContractHome(abs)
-			}
+		if abs, err := config.Abs(p); err == nil {
+			out[i] = config.ContractHome(abs)
 		}
 	}
 	return strings.Join(out, " ")

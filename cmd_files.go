@@ -8,7 +8,6 @@ import (
 	"lichen/internal/config"
 	"lichen/internal/core"
 	"lichen/internal/files"
-	"lichen/internal/module"
 )
 
 func cmdFiles(args []string) error {
@@ -22,61 +21,51 @@ func cmdFiles(args []string) error {
 		if len(args) < 2 {
 			return errors.New("usage: lichen files remove <source|path>...")
 		}
-		return withEnv(func(env *core.Env) error {
-			var removed []string
-			err := module.Change(env, "stop syncing "+tilde(args[1:]...), func() (err error) {
-				removed, err = files.Remove(env, args[1:])
-				return err
-			})
-			if err == nil {
-				fmt.Printf("stopped syncing %s (the files stay where they are)\n", strings.Join(removed, ", "))
-			}
+		var removed []string
+		if err := change("stop syncing "+tilde(args[1:]...), func(env *core.Env) (err error) {
+			removed, err = files.Remove(env, args[1:])
 			return err
-		})
+		}); err != nil {
+			return err
+		}
+		fmt.Printf("stopped syncing %s (the files stay where they are)\n", strings.Join(removed, ", "))
+		return nil
 	case "only":
 		if len(args) < 2 {
 			return errors.New("usage: lichen files only <source|path> [<group>...]")
 		}
 		target, groups := args[1], args[2:]
-		return withEnv(func(env *core.Env) error {
-			msg := fmt.Sprintf("%s goes to %s", tilde(target), core.Describe(groups))
-			err := module.Change(env, msg, func() error {
-				return files.Only(env, target, groups)
-			})
-			if err == nil {
-				fmt.Println(msg)
-			}
+		msg := fmt.Sprintf("%s goes to %s", tilde(target), core.Describe(groups))
+		if err := change(msg, func(env *core.Env) error { return files.Only(env, target, groups) }); err != nil {
 			return err
-		})
+		}
+		fmt.Println(msg)
+		return nil
 	case "recover":
 		if len(args) < 2 {
 			return errors.New("usage: lichen files recover <source|path>...")
 		}
-		return withEnv(func(env *core.Env) error {
-			var recovered []string
-			err := module.Change(env, "recover "+tilde(args[1:]...), func() (err error) {
-				recovered, err = files.Recover(env, args[1:])
-				return err
-			})
-			if err == nil {
-				fmt.Printf("recovered %s\n", strings.Join(recovered, ", "))
-			}
+		var recovered []string
+		if err := change("recover "+tilde(args[1:]...), func(env *core.Env) (err error) {
+			recovered, err = files.Recover(env, args[1:])
 			return err
-		})
+		}); err != nil {
+			return err
+		}
+		fmt.Printf("recovered %s\n", strings.Join(recovered, ", "))
+		return nil
 	case "resolve":
 		if len(args) != 4 || args[2] != "--keep" {
 			return errors.New("usage: lichen files resolve <path> --keep here|synced")
 		}
-		return withEnv(func(env *core.Env) error {
-			if err := files.Resolve(env, args[1], args[3]); err != nil {
-				return err
-			}
-			if err := module.Pass(env, false); err != nil {
-				return err
-			}
-			fmt.Printf("resolved %s\n", tilde(args[1]))
-			return nil
-		})
+		p, keep := args[1], args[3]
+		if err := change(fmt.Sprintf("resolve %s, keeping %s", tilde(p), keep), func(env *core.Env) error {
+			return files.Resolve(env, p, keep)
+		}); err != nil {
+			return err
+		}
+		fmt.Printf("resolved %s\n", tilde(p))
+		return nil
 	case "list", "ls":
 		return cmdFilesList()
 	}
@@ -116,28 +105,31 @@ func cmdFilesAdd(args []string) error {
 	case to != "" && (len(paths) > 1 || name != ""):
 		return errors.New("--to takes one path, and no --name")
 	}
-	return withEnv(func(env *core.Env) error {
-		if to != "" {
-			err := module.Change(env, fmt.Sprintf("write %s to %s", to, tilde(paths[0])), func() error {
-				return files.AddOutput(env, to, paths[0], only)
-			})
-			if err == nil {
-				fmt.Printf("%s now also goes to %s, on %s\n", to, tilde(paths[0]), core.Describe(only))
-			}
+	if to != "" {
+		if err := change(fmt.Sprintf("write %s to %s", to, tilde(paths[0])), func(env *core.Env) error {
+			return files.AddOutput(env, to, paths[0], only)
+		}); err != nil {
 			return err
 		}
-		var added []string
-		err := module.Change(env, "add "+tilde(paths...), func() (err error) {
-			added, err = files.Add(env, paths, name, only)
+		fmt.Printf("%s now also goes to %s, on %s\n", to, tilde(paths[0]), core.Describe(only))
+		return nil
+	}
+	var added []string
+	if err := change("add "+tilde(paths...), func(env *core.Env) (err error) {
+		if added, err = files.Add(env, paths, name, only); err != nil {
 			return err
-		})
-		if err == nil {
-			for i, p := range paths {
-				fmt.Printf("syncing %s on %s, from %s\n", tilde(p), core.Describe(only), config.ContractHome(files.SourcePath(added[i])))
-			}
 		}
+		for i := range added {
+			added[i] = config.ContractHome(env.Path(files.SourcesDir, added[i]))
+		}
+		return nil
+	}); err != nil {
 		return err
-	})
+	}
+	for i, p := range paths {
+		fmt.Printf("syncing %s on %s, from %s\n", tilde(p), core.Describe(only), added[i])
+	}
+	return nil
 }
 
 func cmdFilesList() error {
@@ -167,11 +159,11 @@ func cmdFilesList() error {
 				name = ""
 			}
 			line := fmt.Sprintf("%-*s  %s", width, name, o.Path)
-			if len(o.Only) > 0 {
-				line += "  " + dim("("+strings.Join(o.Only, ", ")+")")
-			}
-			if !env.Device.In(o.Only) {
-				line = dim(fmt.Sprintf("%-*s  %s  (%s, not this device)", width, name, o.Path, strings.Join(o.Only, ", ")))
+			switch {
+			case !env.Device.In(o.Only):
+				line = dim(fmt.Sprintf("%s  (%s, not this device)", line, core.Describe(o.Only)))
+			case len(o.Only) > 0:
+				line += "  " + dim("("+core.Describe(o.Only)+")")
 			}
 			fmt.Println(line)
 		}

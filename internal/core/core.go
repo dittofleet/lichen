@@ -9,12 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"slices"
-	"sort"
 	"strings"
 
 	"lichen/internal/config"
@@ -35,7 +35,7 @@ type Settings struct {
 }
 
 // Env is one run's view of this machine: the sync folder, this device,
-// and the settings, read fresh for every pass.
+// and the settings, re-read whenever they may have changed.
 type Env struct {
 	Dir      string
 	Device   Device
@@ -56,21 +56,67 @@ func Load(lg *log.Logger) (*Env, error) {
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
 		return nil, ErrNotSetUp
 	}
-	var s Settings
-	if _, err := config.ReadJSON(filepath.Join(dir, SettingsFile), &s); err != nil {
-		return nil, err
-	}
-	return &Env{Dir: dir, Device: device(s), Settings: s, Log: lg}, nil
+	e := &Env{Dir: dir, Device: Device{Name: deviceName()}, Log: lg}
+	return e, e.Reload()
 }
 
-// Reload re-reads the settings, as after an edit to them.
+// Reload re-reads the settings, as after a pull or an edit to them.
 func (e *Env) Reload() error {
-	fresh, err := Load(e.Log)
-	if err != nil {
+	var s Settings
+	if _, err := config.ReadJSON(e.Path(SettingsFile), &s); err != nil {
 		return err
 	}
-	*e = *fresh
+	e.Settings = s
+	e.Device.Groups = append([]string{e.Device.Name, osGroup()}, s.GroupsOf(e.Device.Name)...)
 	return nil
+}
+
+// GroupsOf lists the custom groups a device is in, sorted.
+func (s Settings) GroupsOf(device string) []string {
+	var in []string
+	for _, g := range slices.Sorted(maps.Keys(s.Groups)) {
+		if slices.Contains(s.Groups[g], device) {
+			in = append(in, g)
+		}
+	}
+	return in
+}
+
+// EditGroup adds devices to a custom group, or removes them from it: all
+// of them, and the group, when none are named.
+func (e *Env) EditGroup(add bool, group string, devices []string) error {
+	for _, n := range append([]string{group}, devices...) {
+		if err := ValidGroup(n); err != nil {
+			return err
+		}
+	}
+	if group == "mac" || group == "linux" {
+		return fmt.Errorf("%s is a group of its own already", group)
+	}
+	groups := e.Settings.Groups
+	if groups == nil {
+		groups = map[string][]string{}
+	}
+	switch {
+	case add:
+		for _, d := range devices {
+			if !slices.Contains(groups[group], d) {
+				groups[group] = append(groups[group], d)
+			}
+		}
+	case len(devices) == 0:
+		delete(groups, group)
+	default:
+		groups[group] = slices.DeleteFunc(groups[group], func(d string) bool { return slices.Contains(devices, d) })
+		if len(groups[group]) == 0 {
+			delete(groups, group)
+		}
+	}
+	var v any = groups
+	if len(groups) == 0 {
+		v = nil
+	}
+	return config.SetJSONField(e.Path(SettingsFile), "groups", v)
 }
 
 // Path resolves a path inside the sync folder.
@@ -81,7 +127,6 @@ func (e *Env) Path(parts ...string) string {
 // Device is this machine, as lichen scopes things to it.
 type Device struct {
 	Name   string
-	OS     string
 	Groups []string // its own name, its OS, and every custom group it is in
 }
 
@@ -99,20 +144,6 @@ func osGroup() string {
 		return "mac"
 	}
 	return runtime.GOOS
-}
-
-func device(s Settings) Device {
-	name := deviceName()
-	d := Device{Name: name, OS: osGroup(), Groups: []string{name, osGroup()}}
-	var custom []string
-	for g, members := range s.Groups {
-		if slices.Contains(members, name) {
-			custom = append(custom, g)
-		}
-	}
-	sort.Strings(custom)
-	d.Groups = append(d.Groups, custom...)
-	return d
 }
 
 // deviceName is the name crosstalk knows this machine by, so a device is
@@ -164,9 +195,11 @@ func Describe(groups []string) string {
 	return strings.Join(groups, ", ")
 }
 
+var groupName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+
 // ValidGroup reports whether a name can be a device group (or device).
 func ValidGroup(name string) error {
-	if !regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`).MatchString(name) {
+	if !groupName.MatchString(name) {
 		return fmt.Errorf("%q is not a device or group name (lowercase letters, digits and dashes)", name)
 	}
 	return nil

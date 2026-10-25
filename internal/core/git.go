@@ -57,13 +57,13 @@ func (e *Env) abortStaleRebase() {
 	}
 }
 
-// Pull brings in what the other devices pushed, under lichen's
+// pull brings in what the other devices pushed, under lichen's
 // local-wins policy: rebase (not ff-only) so a committed-but-unpushed
 // change doesn't wedge the pull forever, with -X theirs preferring OUR
 // replayed commits on conflict (rebase swaps sides). A failed pull never
 // leaves the repo mid-rebase. No-op without an origin, or while the
 // branch exists nowhere but here.
-func (e *Env) Pull() error {
+func (e *Env) pull() error {
 	e.abortStaleRebase()
 	if e.Origin() == "" || !e.hasUpstream() {
 		return nil
@@ -75,15 +75,32 @@ func (e *Env) Pull() error {
 	return nil
 }
 
+// Update brings the sync folder up to date with what the other devices
+// pushed, and this Env with it, refusing with *OutdatedError if that
+// makes this build too old. A failed pull (offline, say) is logged, not
+// an error: pulled reports it, and work goes on with the local state.
+func (e *Env) Update() (pulled bool, err error) {
+	pulled = true
+	if err := e.pull(); err != nil {
+		pulled = false
+		e.Log.Printf("pull: %v (continuing with local state)", err)
+	}
+	e.repairMarker()
+	if err := e.Reload(); err != nil {
+		return pulled, err
+	}
+	return pulled, e.Gate()
+}
+
 // Commit stages everything in the sync folder and commits it under
-// subject, reporting whether there was anything to commit. The sync
-// folder belongs to lichen: whatever is in it is meant to sync.
-func (e *Env) Commit(subject, body string) (bool, error) {
+// subject, if there is anything to commit. The sync folder belongs to
+// lichen: whatever is in it is meant to sync.
+func (e *Env) Commit(subject, body string) error {
 	if _, err := e.Git("add", "-A"); err != nil {
-		return false, err
+		return err
 	}
 	if _, err := e.Git("diff", "--cached", "--quiet"); err == nil {
-		return false, nil
+		return nil
 	}
 	args := []string{"commit", "--quiet", "-m", fmt.Sprintf("lichen(%s): %s", e.Device.Name, subject)}
 	if body != "" {
@@ -94,30 +111,21 @@ func (e *Env) Commit(subject, body string) (bool, error) {
 	if email, _ := e.Git("config", "user.email"); email == "" {
 		args = append([]string{"-c", "user.name=lichen", "-c", "user.email=lichen@" + e.Device.Name}, args...)
 	}
-	if _, err := e.Git(args...); err != nil {
-		return false, err
-	}
-	return true, nil
+	_, err := e.Git(args...)
+	return err
 }
 
-// Changes lists the paths in the sync folder that differ from the last
-// commit, for describing edits made there directly.
-func (e *Env) Changes() []string {
-	out, err := e.Git("status", "--porcelain", "--untracked-files=all")
-	if err != nil || out == "" {
-		return nil
+// Changes stages every edit made in the sync folder since the last
+// commit, and lists the paths, for describing edits made there directly.
+func (e *Env) Changes() ([]string, error) {
+	if _, err := e.Git("add", "-A"); err != nil {
+		return nil, err
 	}
-	var paths []string
-	for _, l := range strings.Split(out, "\n") {
-		if len(l) > 3 {
-			p := l[3:]
-			if _, to, ok := strings.Cut(p, " -> "); ok {
-				p = to
-			}
-			paths = append(paths, strings.Trim(p, `"`))
-		}
+	out, err := e.Git("diff", "--cached", "--name-only", "-z")
+	if err != nil {
+		return nil, err
 	}
-	return paths
+	return strings.FieldsFunc(out, func(r rune) bool { return r == 0 }), nil
 }
 
 // Push publishes local commits and nudges the other devices. A racing
@@ -134,14 +142,14 @@ func (e *Env) Push() error {
 		}
 	}
 	if _, err := e.Git("push", "--quiet", "-u", "origin", "HEAD"); err != nil {
-		if e.Pull() != nil {
+		// That pull may deliver a version bump.
+		pulled, uerr := e.Update()
+		if uerr != nil {
+			return uerr
+		}
+		if !pulled {
 			e.Log.Printf("push failed (will retry on the next pass): %v", err)
 			return nil
-		}
-		// That pull may have delivered a version bump.
-		e.repairMarker()
-		if gerr := e.Gate(); gerr != nil {
-			return gerr
 		}
 		if _, err := e.Git("push", "--quiet", "-u", "origin", "HEAD"); err != nil {
 			e.Log.Printf("push failed (will retry on the next pass): %v", err)
@@ -156,7 +164,8 @@ func (e *Env) Push() error {
 
 // Setup creates this machine's sync folder: a clone of url, or with no
 // url a folder of its own, not synced anywhere until it gets an origin.
-// An empty repo is a first device, and gets lichen.json to mark it. A
+// An empty repo is a first device, and gets lichen.json to mark it (and
+// a .gitignore, so editors' droppings in the folder never sync). A
 // repo with content but no lichen.json is not a sync repo (most likely
 // lichen's own source repo, passed by mistake) and is refused.
 func Setup(url string) (string, error) {
@@ -191,5 +200,5 @@ func Setup(url string) (string, error) {
 	if err := config.WriteJSON(settings, map[string]any{}); err != nil {
 		return dir, err
 	}
-	return dir, nil
+	return dir, config.WriteFile(filepath.Join(dir, ".gitignore"), []byte(config.GitIgnore), 0o644)
 }

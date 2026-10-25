@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dittofleet/go-cli-kit/xdg"
+
 	"lichen/internal/config"
 )
 
@@ -17,7 +19,7 @@ import (
 const label = "dev.lichen"
 
 func plistPath() string {
-	return filepath.Join(home(), "Library", "LaunchAgents", label+".plist")
+	return filepath.Join(xdg.Home(), "Library", "LaunchAgents", label+".plist")
 }
 
 func domain() string {
@@ -27,6 +29,19 @@ func domain() string {
 // target names the service itself to launchctl.
 func target() string {
 	return domain() + "/" + label
+}
+
+func launchctl(args ...string) error {
+	out, err := exec.Command("launchctl", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("launchctl %s: %s", args[0], strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// loaded reports whether launchd has the service.
+func loaded() bool {
+	return exec.Command("launchctl", "print", target()).Run() == nil
 }
 
 // Installed reports whether the service has been set up on this machine.
@@ -80,20 +95,19 @@ func Install(binary string) error {
 		return err
 	}
 	// Out with the old one first. There being none is the usual case.
-	exec.Command("launchctl", "bootout", target()).Run()
+	launchctl("bootout", target())
 	if err := os.WriteFile(plistPath(), []byte(plist), 0o644); err != nil {
 		return err
 	}
 	// launchd refuses a service whose last run is still shutting down, so
 	// right after a bootout this can take a moment to go through.
-	var out []byte
 	for range 10 {
-		if out, err = exec.Command("launchctl", "bootstrap", domain(), plistPath()).CombinedOutput(); err == nil {
+		if err = launchctl("bootstrap", domain(), plistPath()); err == nil {
 			return nil
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
-	return fmt.Errorf("launchctl bootstrap: %s", strings.TrimSpace(string(out)))
+	return err
 }
 
 // Running reports whether the daemon is up, as launchd describes it.
@@ -114,38 +128,26 @@ func Running() (bool, string) {
 
 // Start starts an installed daemon that was stopped.
 func Start() error {
-	if exec.Command("launchctl", "print", target()).Run() == nil {
+	if loaded() {
 		return nil
 	}
-	out, err := exec.Command("launchctl", "bootstrap", domain(), plistPath()).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("launchctl bootstrap: %s", strings.TrimSpace(string(out)))
-	}
-	return nil
+	return launchctl("bootstrap", domain(), plistPath())
 }
 
 // Stop stops the daemon until the next Start or login.
 func Stop() error {
-	if exec.Command("launchctl", "print", target()).Run() != nil {
+	if !loaded() {
 		return nil
 	}
-	out, err := exec.Command("launchctl", "bootout", target()).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("launchctl bootout: %s", strings.TrimSpace(string(out)))
-	}
-	return nil
+	return launchctl("bootout", target())
 }
 
 // Restart stops the daemon and starts it again, for a new binary.
 func Restart() error {
-	if exec.Command("launchctl", "print", target()).Run() != nil {
+	if !loaded() {
 		return Start()
 	}
-	out, err := exec.Command("launchctl", "kickstart", "-k", target()).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("launchctl kickstart: %s", strings.TrimSpace(string(out)))
-	}
-	return nil
+	return launchctl("kickstart", "-k", target())
 }
 
 // Remove stops the daemon and takes the service away. With no service set
@@ -156,9 +158,8 @@ func Remove() error {
 	}
 	// Stopping one that is not loaded fails, which is fine. One that is
 	// still loaded afterwards is not: its daemon would go on syncing.
-	stop := exec.Command("launchctl", "bootout", target()).Run()
-	if stop != nil && exec.Command("launchctl", "print", target()).Run() == nil {
-		return fmt.Errorf("launchctl bootout %s: %w", target(), stop)
+	if err := launchctl("bootout", target()); err != nil && loaded() {
+		return err
 	}
 	return os.Remove(plistPath())
 }

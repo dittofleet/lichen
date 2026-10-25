@@ -13,15 +13,17 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
+	"slices"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 
+	"lichen/internal/config"
 	"lichen/internal/core"
 	"lichen/internal/events"
+	"lichen/internal/files"
 	"lichen/internal/module"
 	"lichen/internal/proclock"
 	"lichen/internal/selfupdate"
@@ -45,8 +47,10 @@ func Run() error {
 	// as it being gone.
 	pulls := make(chan struct{}, 1)
 	locals := make(chan struct{}, 1)
-	rewatch := make(chan struct{}, 1)
+	rewatch := make(chan watched, 1)
 	go func() {
+		hourly := time.NewTicker(pollInterval)
+		defer hourly.Stop()
 		for {
 			pull := true
 			select {
@@ -55,10 +59,16 @@ func Run() error {
 			case <-pulls:
 			case <-locals:
 				pull = false
-			case <-time.After(pollInterval):
+			case <-hourly.C:
 			}
-			pass(ctx, lg, pull)
-			poke(rewatch)
+			if w, ok := pass(ctx, lg, pull); ok {
+				// The latest list replaces one the watcher hasn't taken.
+				select {
+				case <-rewatch:
+				default:
+				}
+				rewatch <- w
+			}
 		}
 	}()
 
@@ -100,10 +110,11 @@ func Run() error {
 }
 
 // pass runs one module pass holding the cross-process lock, so none can
-// race a CLI command. An outdated build self-updates afterwards, once
-// the lock is released: the download needs neither lock, and holding it
-// through a slow network would block every CLI command meanwhile.
-func pass(ctx context.Context, lg *log.Logger, pull bool) {
+// race a CLI command, and returns what to watch from then on. An
+// outdated build self-updates afterwards, once the lock is released: the
+// download needs neither lock, and holding it through a slow network
+// would block every CLI command meanwhile.
+func pass(ctx context.Context, lg *log.Logger, pull bool) (w watched, ok bool) {
 	var repoV string
 	func() {
 		release, err := proclock.Acquire(ctx, nil)
@@ -119,7 +130,12 @@ func pass(ctx context.Context, lg *log.Logger, pull bool) {
 			lg.Printf("%v", err)
 			return
 		}
-		err = module.Pass(env, pull)
+		if pull {
+			err = module.Pass(env, true)
+		} else {
+			err = module.Local(env)
+		}
+		w, ok = watchList(env), true
 		var outdated *core.OutdatedError
 		if errors.As(err, &outdated) {
 			repoV = outdated.Repo
@@ -131,6 +147,7 @@ func pass(ctx context.Context, lg *log.Logger, pull bool) {
 	if repoV != "" {
 		autoUpdate(lg, repoV)
 	}
+	return w, ok
 }
 
 // poke signals ch without blocking: a full buffer already means the
@@ -186,28 +203,34 @@ type watched struct {
 	trees []string
 }
 
+// watchList is what to watch on this device: the sync folder, and what
+// the files module writes.
+func watchList(env *core.Env) watched {
+	fs, trees := files.Watched(env)
+	w := watched{files: map[string]bool{}, trees: append(trees, env.Dir)}
+	for _, f := range fs {
+		w.files[f] = true
+	}
+	return w
+}
+
 func (w *watched) concerns(path string) bool {
 	if w.files[path] {
 		return true
 	}
-	base := filepath.Base(path)
-	if base == ".DS_Store" || strings.HasSuffix(base, ".lichen-tmp") {
+	if config.Ignored(filepath.Base(path)) {
 		return false
 	}
-	for _, t := range w.trees {
-		if path == t || strings.HasPrefix(path, t+"/") {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(w.trees, func(t string) bool { return config.Within(path, t) })
 }
 
 // watch queues a local pass whenever something watched changes:
 // fsnotify on directories (watching dirs, not files, survives the
 // write-tmp-then-rename dance editors do), debounced. Its own writes
-// trigger it too, but the pass that follows finds nothing to do. The
-// watch list is refreshed after every pass, which is when it can change.
-func watch(ctx context.Context, lg *log.Logger, locals, rewatch chan struct{}) {
+// trigger it too, but the pass that follows finds nothing to do. Every
+// pass hands it a fresh list, as a pass is what changes it, and the
+// first pass catches up on whatever changed before.
+func watch(ctx context.Context, lg *log.Logger, locals chan<- struct{}, rewatch <-chan watched) {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		lg.Printf("watcher: %v", err)
@@ -216,22 +239,10 @@ func watch(ctx context.Context, lg *log.Logger, locals, rewatch chan struct{}) {
 	defer w.Close()
 
 	var cur watched
-	refresh := func() {
-		env, err := core.Load(lg)
-		if err != nil {
-			return
-		}
-		next := watched{files: map[string]bool{}, trees: []string{env.Dir}}
+	refresh := func(next watched) {
 		dirs := map[string]bool{}
-		for _, m := range module.All {
-			if wm, ok := m.(module.Watcher); ok {
-				files, trees := wm.Watched(env)
-				for _, f := range files {
-					next.files[f] = true
-					dirs[filepath.Dir(f)] = true
-				}
-				next.trees = append(next.trees, trees...)
-			}
+		for f := range next.files {
+			dirs[filepath.Dir(f)] = true
 		}
 		for _, t := range next.trees {
 			dirs[filepath.Dir(t)] = true // to see the tree itself go
@@ -239,7 +250,7 @@ func watch(ctx context.Context, lg *log.Logger, locals, rewatch chan struct{}) {
 				if err != nil || !d.IsDir() {
 					return nil
 				}
-				if d.Name() == ".git" {
+				if config.Ignored(d.Name()) {
 					return filepath.SkipDir
 				}
 				dirs[p] = true
@@ -256,7 +267,6 @@ func watch(ctx context.Context, lg *log.Logger, locals, rewatch chan struct{}) {
 		}
 		cur = next
 	}
-	refresh()
 
 	debounce := time.NewTimer(time.Hour)
 	debounce.Stop()
@@ -264,14 +274,11 @@ func watch(ctx context.Context, lg *log.Logger, locals, rewatch chan struct{}) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-rewatch:
-			refresh()
+		case next := <-rewatch:
+			refresh(next)
 		case ev, ok := <-w.Events:
 			if !ok {
 				return
-			}
-			if strings.Contains(ev.Name, "/.git/") || strings.HasSuffix(ev.Name, "/.git") {
-				continue
 			}
 			if cur.concerns(ev.Name) {
 				debounce.Reset(1500 * time.Millisecond)

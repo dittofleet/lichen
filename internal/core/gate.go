@@ -32,31 +32,22 @@ func (e *Env) Gate() error {
 	if err != nil {
 		return err
 	}
-	return gateAgainst(repoV)
-}
-
-func gateAgainst(repoV string) error {
 	if version.IsRelease() && repoV != "" && version.Compare(version.Current, repoV) < 0 {
 		return &OutdatedError{Build: version.Current, Repo: repoV}
 	}
 	return nil
 }
 
-// SyncVersion is the post-pull pass over the marker: undo a rebase
-// downgrade, refuse if this build is behind, and record this build if it
-// is ahead (committed, so the pass's push tells every other device to
-// update). Recording is skipped when the pull failed: a bump computed
-// against a marker that could not be refreshed may be stale.
-func (e *Env) SyncVersion(pulled bool) error {
-	e.repairMarker()
+// RecordVersion records this build in the sync folder if it is newer
+// than the marker (committed, so the pass's push tells every other
+// device to update). Run it only after a pull that went through: a bump
+// computed against a marker that could not be refreshed may be stale.
+func (e *Env) RecordVersion() error {
 	repoV, err := e.markerVersion()
 	if err != nil {
 		return err
 	}
-	if err := gateAgainst(repoV); err != nil {
-		return err
-	}
-	if !pulled || !version.IsRelease() || (repoV != "" && version.Compare(version.Current, repoV) <= 0) {
+	if !version.IsRelease() || (repoV != "" && version.Compare(version.Current, repoV) <= 0) {
 		return nil
 	}
 	if err := os.MkdirAll(e.Path(".lichen"), 0o755); err != nil {
@@ -66,8 +57,7 @@ func (e *Env) SyncVersion(pulled bool) error {
 		return err
 	}
 	e.Log.Printf("recording lichen %s in the sync folder", version.Current)
-	_, err = e.Commit("version "+version.Current, "")
-	return err
+	return e.Commit("version "+version.Current, "")
 }
 
 // repairMarker undoes a marker downgrade left by a rebase: the conflict

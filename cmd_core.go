@@ -4,11 +4,9 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
 
@@ -115,7 +113,7 @@ func cmdStatus() error {
 		channel = paint("33", channel+": other devices' changes arrive with the hourly pass")
 	}
 	fmt.Printf("%s   %s\n", bold("events:"), channel)
-	fmt.Printf("%s   %s %s\n", bold("device:"), env.Device.Name, dim("("+strings.Join(env.Device.Groups[1:], ", ")+")"))
+	fmt.Printf("%s   %s %s\n", bold("device:"), env.Device.Name, dim("("+core.Describe(env.Device.Groups[1:])+")"))
 	origin := env.Origin()
 	if origin == "" {
 		origin = paint("33", "no remote: not synced anywhere")
@@ -175,12 +173,6 @@ func cmdDevices() error {
 		width = max(width, len(d.Name))
 	}
 	for _, d := range devices {
-		var groups []string
-		for _, g := range slices.Sorted(maps.Keys(env.Settings.Groups)) {
-			if slices.Contains(env.Settings.Groups[g], d.Name) {
-				groups = append(groups, g)
-			}
-		}
 		note := ""
 		switch {
 		case d.Self:
@@ -188,7 +180,7 @@ func cmdDevices() error {
 		case !d.Online:
 			note = " (away)"
 		}
-		fmt.Printf("%-*s  %s%s\n", width, d.Name, strings.Join(groups, ", "), dim(note))
+		fmt.Printf("%-*s  %s%s\n", width, d.Name, strings.Join(env.Settings.GroupsOf(d.Name), ", "), dim(note))
 	}
 	return nil
 }
@@ -198,42 +190,9 @@ func cmdGroups(args []string) error {
 		return errors.New("usage: lichen groups add <group> <device>...  or  lichen groups remove <group> [<device>...]")
 	}
 	op, group, members := args[0], args[1], args[2:]
-	for _, n := range append([]string{group}, members...) {
-		if err := core.ValidGroup(n); err != nil {
-			return err
-		}
-	}
-	if group == "mac" || group == "linux" {
-		return fmt.Errorf("%s is a group of its own already", group)
-	}
-	return withEnv(func(env *core.Env) error {
-		subject := fmt.Sprintf("groups: %s %s %s", op, group, strings.Join(members, " "))
-		return module.Change(env, strings.TrimSpace(subject), func() error {
-			groups := env.Settings.Groups
-			if groups == nil {
-				groups = map[string][]string{}
-			}
-			switch {
-			case op == "add":
-				for _, m := range members {
-					if !slices.Contains(groups[group], m) {
-						groups[group] = append(groups[group], m)
-					}
-				}
-			case len(members) == 0:
-				delete(groups, group)
-			default:
-				groups[group] = slices.DeleteFunc(groups[group], func(m string) bool { return slices.Contains(members, m) })
-				if len(groups[group]) == 0 {
-					delete(groups, group)
-				}
-			}
-			var v any = groups
-			if len(groups) == 0 {
-				v = nil
-			}
-			return config.SetJSONField(env.Path(core.SettingsFile), "groups", v)
-		})
+	subject := strings.TrimSpace(fmt.Sprintf("groups: %s %s %s", op, group, strings.Join(members, " ")))
+	return change(subject, func(env *core.Env) error {
+		return env.EditGroup(op == "add", group, members)
 	})
 }
 

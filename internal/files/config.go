@@ -9,6 +9,7 @@
 package files
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -17,7 +18,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"time"
 
 	"lichen/internal/config"
 	"lichen/internal/core"
@@ -68,22 +68,17 @@ func (c *fileConfig) save(env *core.Env) error {
 	return config.SetJSONField(env.Path(ConfigFile), "sources", c.Sources)
 }
 
-// tombstone records a deleted source: which outputs it had, for recover.
-type tombstone struct {
-	Outputs []string `json:"outputs"`
-	Device  string   `json:"device"`
-	At      string   `json:"at"`
-}
-
-func loadDeleted(env *core.Env) (map[string]tombstone, error) {
-	m := map[string]tombstone{}
+// loadDeleted reads the deleted sources, each with the outputs it had,
+// for recover.
+func loadDeleted(env *core.Env) (map[string][]string, error) {
+	m := map[string][]string{}
 	if _, err := config.ReadJSON(env.Path(deletedFile), &m); err != nil {
 		return nil, err
 	}
 	return m, nil
 }
 
-func saveDeleted(env *core.Env, m map[string]tombstone) error {
+func saveDeleted(env *core.Env, m map[string][]string) error {
 	if len(m) == 0 {
 		err := os.Remove(env.Path(deletedFile))
 		if os.IsNotExist(err) {
@@ -105,16 +100,25 @@ func bury(env *core.Env, c *fileConfig, name string) error {
 	for _, o := range c.Sources[name].To {
 		outs = append(outs, o.Path)
 	}
-	dead[name] = tombstone{Outputs: outs, Device: env.Device.Name, At: time.Now().UTC().Format(time.RFC3339)}
+	dead[name] = outs
+	if err := dropSource(env, c, name); err != nil {
+		return err
+	}
+	if err := c.save(env); err != nil {
+		return err
+	}
+	return saveDeleted(env, dead)
+}
+
+// dropSource removes a source and its entry, leaving every output as it
+// is.
+func dropSource(env *core.Env, c *fileConfig, name string) error {
 	delete(c.Sources, name)
 	if err := os.RemoveAll(sourcePath(env, name)); err != nil {
 		return err
 	}
 	removeEmptyParents(filepath.Dir(sourcePath(env, name)), env.Path(SourcesDir))
-	if err := c.save(env); err != nil {
-		return err
-	}
-	return saveDeleted(env, dead)
+	return nil
 }
 
 func sourcePath(env *core.Env, name string) string {
@@ -141,6 +145,37 @@ func validName(name string) error {
 	return nil
 }
 
+// root is where an output goes, absolute.
+func (o Output) root() (string, error) {
+	abs, err := config.ExpandHome(o.Path)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(abs) {
+		return "", errors.New("not a ~/ path")
+	}
+	return filepath.Clean(abs), nil
+}
+
+// checkOutput refuses what can't be an output: anything outside the home
+// directory, and lichen's own folders.
+func checkOutput(env *core.Env, abs string) error {
+	home, err := config.Home()
+	if err != nil {
+		return err
+	}
+	if abs == home || !config.Within(abs, home) {
+		return fmt.Errorf("%s is not inside your home directory: only files under ~ can sync", abs)
+	}
+	data, _ := config.DataDir()
+	for _, own := range []string{env.Dir, data} {
+		if config.Within(abs, own) || config.Within(own, abs) {
+			return fmt.Errorf("%s is lichen's own folder, it can't sync", config.ContractHome(abs))
+		}
+	}
+	return nil
+}
+
 // want is one output file this device should have.
 type want struct {
 	source string // files.json entry
@@ -151,10 +186,18 @@ type want struct {
 }
 
 // wants lists every output file meant for this device, keyed by its
-// path. Two sources claiming one path are a config mistake: the first
-// (by name) wins and the clash is logged.
-func wants(env *core.Env, c *fileConfig) map[string]want {
-	out := map[string]want{}
+// path, and every directory output meant for it (including ones with no
+// files yet), mapped to its source. Two sources claiming one path are a
+// config mistake: the first (by name) wins and the clash is logged.
+func wants(env *core.Env, c *fileConfig) (ws map[string]want, dirs map[string]string) {
+	ws, dirs = map[string]want{}, map[string]string{}
+	add := func(w want) {
+		if prev, ok := ws[w.path]; ok {
+			env.Log.Printf("files: %s and %s both go to %s, keeping %s", prev.source, w.source, config.ContractHome(w.path), prev.source)
+			return
+		}
+		ws[w.path] = w
+	}
 	for _, name := range slices.Sorted(maps.Keys(c.Sources)) {
 		src := sourcePath(env, name)
 		fi, err := os.Stat(src)
@@ -165,42 +208,27 @@ func wants(env *core.Env, c *fileConfig) map[string]want {
 			if !env.Device.In(o.Only) {
 				continue
 			}
-			root, err := config.ExpandHome(o.Path)
-			if err != nil || !filepath.IsAbs(root) {
-				env.Log.Printf("files: %s: ignoring output %q (not a ~/ path)", name, o.Path)
-				continue
+			root, err := o.root()
+			if err == nil {
+				err = checkOutput(env, root)
 			}
-			root = filepath.Clean(root)
-			add := func(w want) {
-				if prev, ok := out[w.path]; ok {
-					env.Log.Printf("files: %s and %s both go to %s, keeping %s", prev.source, w.source, config.ContractHome(w.path), prev.source)
-					return
-				}
-				out[w.path] = w
+			if err != nil {
+				env.Log.Printf("files: %s: ignoring output %s: %v", name, o.Path, err)
+				continue
 			}
 			if !fi.IsDir() {
 				add(want{source: name, file: name, path: root, root: root})
 				continue
+			}
+			if _, ok := dirs[root]; !ok {
+				dirs[root] = name
 			}
 			for _, rel := range listFiles(src) {
 				add(want{source: name, file: path.Join(name, rel), path: filepath.Join(root, filepath.FromSlash(rel)), root: root, dir: true})
 			}
 		}
 	}
-	return out
-}
-
-// ignored names files that never sync, even inside a synced directory:
-// Finder's and editors' droppings, and lichen's own half-written files.
-func ignored(name string) bool {
-	switch {
-	case name == ".DS_Store", name == ".git", strings.HasSuffix(name, ".lichen-tmp"),
-		strings.HasSuffix(name, ".swp"), strings.HasSuffix(name, ".swo"), strings.HasSuffix(name, ".swx"),
-		strings.HasSuffix(name, "~"), strings.HasPrefix(name, ".#"),
-		strings.HasPrefix(name, "#") && strings.HasSuffix(name, "#"):
-		return true
-	}
-	return false
+	return ws, dirs
 }
 
 // listFiles returns the regular files under dir, relative and slashed,
@@ -211,7 +239,7 @@ func listFiles(dir string) []string {
 		if err != nil {
 			return nil
 		}
-		if p != dir && ignored(d.Name()) {
+		if p != dir && config.Ignored(d.Name()) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -225,10 +253,4 @@ func listFiles(dir string) []string {
 	})
 	sort.Strings(rels)
 	return rels
-}
-
-// SourcePath is where a source lives, for showing people.
-func SourcePath(name string) string {
-	dir, _ := config.SyncDir()
-	return filepath.Join(dir, SourcesDir, filepath.FromSlash(name))
 }

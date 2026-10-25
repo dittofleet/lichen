@@ -258,9 +258,8 @@ func TestScopes(t *testing.T) {
 	a.change(func(env *core.Env) error {
 		return files.Only(env, "~/.zshrc", []string{"apple", "fruit"})
 	})
-	b.change(func(env *core.Env) error {
-		return os.WriteFile(env.Path(core.SettingsFile), []byte(`{"groups": {"fruit": ["banana"]}}`), 0o644)
-	})
+	a.change(func(env *core.Env) error { return env.EditGroup(true, "fruit", []string{"banana"}) })
+	b.sync()
 	expect(t, b, ".zshrc", "apple only\n")
 
 	// Scoping banana out again leaves its copy, no longer synced.
@@ -318,13 +317,109 @@ func TestConflictWaitsForResolve(t *testing.T) {
 		t.Fatalf("conflicts = %v, want ~/.zshrc", c)
 	}
 
-	env := b.env()
-	if err := files.Resolve(env, b.path(".zshrc"), "here"); err != nil {
-		t.Fatal(err)
-	}
-	b.sync()
+	b.change(func(env *core.Env) error { return files.Resolve(env, b.path(".zshrc"), "here") })
 	a.sync()
 	expect(t, a, ".zshrc", "banana\n")
+	if c := files.Conflicts(); len(c) != 0 {
+		t.Fatalf("conflicts = %v after resolving", c)
+	}
+
+	// And the other way round: the synced version wins.
+	a.write(".zshrc", "apple again\n")
+	a.sync()
+	b.write(".zshrc", "banana again\n")
+	b.sync()
+	b.change(func(env *core.Env) error { return files.Resolve(env, b.path(".zshrc"), "synced") })
+	expect(t, b, ".zshrc", "apple again\n")
+}
+
+// A group edit lands on top of the other devices' edits, never over
+// them: the edit runs on freshly pulled settings.
+func TestGroupEditsDoNotRevertEachOther(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	b := newDevice(t, remote, "banana")
+	a.change(func(env *core.Env) error { return env.EditGroup(true, "fruit", []string{"apple", "banana"}) })
+	b.change(func(env *core.Env) error { return env.EditGroup(true, "servers", []string{"banana"}) })
+	a.sync()
+	if got := strings.Join(a.env().Device.Groups, " "); got != "apple mac fruit" && got != "apple linux fruit" {
+		t.Fatalf("apple's groups = %q", got)
+	}
+	if got := b.env().Settings.GroupsOf("banana"); strings.Join(got, " ") != "fruit servers" {
+		t.Fatalf("banana's groups = %v, want fruit servers", got)
+	}
+	b.change(func(env *core.Env) error { return env.EditGroup(false, "fruit", []string{"banana"}) })
+	if got := b.env().Settings.GroupsOf("banana"); strings.Join(got, " ") != "servers" {
+		t.Fatalf("banana's groups = %v, want servers", got)
+	}
+	for _, bad := range []string{"mac", "Bad Name"} {
+		if err := b.env().EditGroup(true, bad, []string{"banana"}); err == nil {
+			t.Fatalf("EditGroup(%q) went through", bad)
+		}
+	}
+}
+
+// Swap files, Finder's .DS_Store and the like never sync: not from the
+// sync folder, and not from a synced directory.
+func TestEditorDroppingsDoNotSync(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write(".config/app/settings", "x\n")
+	a.add(".config/app")
+	a.write(".config/app/.settings.swp", "swap")
+	a.write(".config/app/.DS_Store", "finder")
+	a.write("lichen/files/config/app/.settings.swp", "swap")
+	a.write("lichen/.DS_Store", "finder")
+	a.sync()
+	b := newDevice(t, remote, "banana")
+	expect(t, b, ".config/app/settings", "x\n")
+	for _, rel := range []string{".config/app/.settings.swp", ".config/app/.DS_Store", "lichen/files/config/app/.settings.swp", "lichen/.DS_Store"} {
+		if b.has(rel) {
+			t.Errorf("banana got ~/%s", rel)
+		}
+	}
+}
+
+// An output written into files.json by hand is held to what lichen
+// files add allows: under the home directory, outside lichen's folders.
+func TestOutputsOutsideHomeAreIgnored(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write(".zshrc", "z\n")
+	a.add(".zshrc")
+	outside := filepath.Join(filepath.Dir(a.home), "outside-"+filepath.Base(a.home))
+	t.Cleanup(func() { os.Remove(outside) })
+	a.write("lichen/files.json", `{"sources": {"zshrc": {"to": [
+		{"path": "~/.zshrc"},
+		{"path": "~/../`+filepath.Base(outside)+`"},
+		{"path": "~/lichen/zshrc"},
+		{"path": "relative/zshrc"}
+	]}}}`)
+	a.sync()
+	expect(t, a, ".zshrc", "z\n")
+	for _, p := range []string{outside, a.path("lichen/zshrc"), a.path("relative/zshrc")} {
+		if _, err := os.Lstat(p); err == nil {
+			t.Errorf("wrote %s", p)
+		}
+	}
+}
+
+// An edit made in the sync folder directly is committed under its path.
+func TestDirectEditsAreDescribed(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write(".zshrc", "one\n")
+	a.add(".zshrc")
+	a.write("lichen/files/zshrc", "two\n")
+	a.sync()
+	expect(t, a, ".zshrc", "two\n")
+	out, err := exec.Command("git", "-C", a.path("lichen"), "log", "-1", "--format=%s").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "lichen(apple): edit files/zshrc" {
+		t.Fatalf("commit subject = %q", got)
+	}
 }
 
 func TestDeviceGroups(t *testing.T) {
