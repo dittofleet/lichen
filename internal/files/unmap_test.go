@@ -107,7 +107,7 @@ func TestUnmapKeepsBlankLastLines(t *testing.T) {
 		srcs := map[string]string{"zshrc": "top\n§ part\nend\n", "part": tc.part}
 		got, open, err := unmapped(t, srcs, tc.live, "part")
 		if err != nil || len(open) > 0 || got["part"] != tc.want {
-			t.Fatalf("part %q, output %q: sources = %q, %v, %v; want part %q", tc.part, tc.live, got, open, err, tc.want)
+			t.Fatalf("part %q, output %q: sources = %q, %v, %v, want part %q", tc.part, tc.live, got, open, err, tc.want)
 		}
 	}
 }
@@ -142,7 +142,7 @@ func TestUnmapInsertedTwice(t *testing.T) {
 	srcs := map[string]string{"zshrc": "§ x\nmid\n§ x\n", "x": "a\nb\n"}
 	got, open, err := unmapped(t, srcs, "a\nB\nmid\na\nb\n", "")
 	if err != nil || len(open) > 0 || got["x"] != "a\nB\n" {
-		t.Fatalf("one copy edited: sources = %q, %v, %v; want x edited", got, open, err)
+		t.Fatalf("one copy edited: sources = %q, %v, %v, want x edited", got, open, err)
 	}
 	got, _, err = unmapped(t, srcs, "a\nB\nmid\na\nB\n", "")
 	if err != nil || got["x"] != "a\nB\n" {
@@ -166,7 +166,7 @@ func TestDiff(t *testing.T) {
 	} {
 		got, err := diff(strings.Fields(tc.old), strings.Fields(tc.new))
 		if err != nil || !slices.Equal(got, tc.want) {
-			t.Fatalf("diff(%q, %q) = %v, %v; want %v", tc.old, tc.new, got, err, tc.want)
+			t.Fatalf("diff(%q, %q) = %v, %v, want %v", tc.old, tc.new, got, err, tc.want)
 		}
 	}
 }
