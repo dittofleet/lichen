@@ -22,7 +22,7 @@ func cmdFiles(args []string) error {
 			return errors.New("usage: lichen files remove <source|path>...")
 		}
 		var removed []string
-		if err := change("stop syncing "+tilde(args[1:]...), func(env *core.Env) (err error) {
+		if err := change("stop syncing "+targets(args[1:]...), func(env *core.Env) (err error) {
 			removed, err = files.Remove(env, args[1:])
 			return err
 		}); err != nil {
@@ -35,7 +35,7 @@ func cmdFiles(args []string) error {
 			return errors.New("usage: lichen files only <source|path> [<group>...]")
 		}
 		target, groups := args[1], args[2:]
-		msg := fmt.Sprintf("%s goes to %s", tilde(target), core.Describe(groups))
+		msg := fmt.Sprintf("%s goes to %s", targets(target), core.Describe(groups))
 		if err := change(msg, func(env *core.Env) error { return files.Only(env, target, groups) }); err != nil {
 			return err
 		}
@@ -46,7 +46,7 @@ func cmdFiles(args []string) error {
 			return errors.New("usage: lichen files recover <source|path>...")
 		}
 		var recovered []string
-		if err := change("recover "+tilde(args[1:]...), func(env *core.Env) (err error) {
+		if err := change("recover "+targets(args[1:]...), func(env *core.Env) (err error) {
 			recovered, err = files.Recover(env, args[1:])
 			return err
 		}); err != nil {

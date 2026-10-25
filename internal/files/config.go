@@ -11,6 +11,7 @@ package files
 import (
 	"errors"
 	"fmt"
+	"log"
 	"maps"
 	"os"
 	"path"
@@ -44,6 +45,9 @@ type Output struct {
 // Source is one entry of files.json, keyed by its path under files/.
 type Source struct {
 	To []Output `json:"to"`
+	// Private sources were added with no access for anyone but their
+	// owner (~/.netrc, say), and new outputs are written that way.
+	Private bool `json:"private,omitempty"`
 }
 
 type fileConfig struct {
@@ -68,17 +72,17 @@ func (c *fileConfig) save(env *core.Env) error {
 	return config.SetJSONField(env.Path(ConfigFile), "sources", c.Sources)
 }
 
-// loadDeleted reads the deleted sources, each with the outputs it had,
-// for recover.
-func loadDeleted(env *core.Env) (map[string][]string, error) {
-	m := map[string][]string{}
+// loadDeleted reads the deleted sources, each with the entry it had, for
+// bringing it back.
+func loadDeleted(env *core.Env) (map[string]Source, error) {
+	m := map[string]Source{}
 	if _, err := config.ReadJSON(env.Path(deletedFile), &m); err != nil {
 		return nil, err
 	}
 	return m, nil
 }
 
-func saveDeleted(env *core.Env, m map[string][]string) error {
+func saveDeleted(env *core.Env, m map[string]Source) error {
 	if len(m) == 0 {
 		err := os.Remove(env.Path(deletedFile))
 		if os.IsNotExist(err) {
@@ -96,11 +100,7 @@ func bury(env *core.Env, c *fileConfig, name string) error {
 	if err != nil {
 		return err
 	}
-	var outs []string
-	for _, o := range c.Sources[name].To {
-		outs = append(outs, o.Path)
-	}
-	dead[name] = outs
+	dead[name] = c.Sources[name]
 	if err := dropSource(env, c, name); err != nil {
 		return err
 	}
@@ -188,12 +188,18 @@ type want struct {
 // wants lists every output file meant for this device, keyed by its
 // path, and every directory output meant for it (including ones with no
 // files yet), mapped to its source. Two sources claiming one path are a
-// config mistake: the first (by name) wins and the clash is logged.
-func wants(env *core.Env, c *fileConfig) (ws map[string]want, dirs map[string]string) {
+// config mistake: the first (by name) wins, and the clash goes to lg,
+// unless it is nil.
+func wants(env *core.Env, c *fileConfig, lg *log.Logger) (ws map[string]want, dirs map[string]string) {
 	ws, dirs = map[string]want{}, map[string]string{}
+	logf := func(format string, args ...any) {
+		if lg != nil {
+			lg.Printf(format, args...)
+		}
+	}
 	add := func(w want) {
 		if prev, ok := ws[w.path]; ok {
-			env.Log.Printf("files: %s and %s both go to %s, keeping %s", prev.source, w.source, config.ContractHome(w.path), prev.source)
+			logf("files: %s and %s both go to %s, keeping %s", prev.source, w.source, config.ContractHome(w.path), prev.source)
 			return
 		}
 		ws[w.path] = w
@@ -213,7 +219,7 @@ func wants(env *core.Env, c *fileConfig) (ws map[string]want, dirs map[string]st
 				err = checkOutput(env, root)
 			}
 			if err != nil {
-				env.Log.Printf("files: %s: ignoring output %s: %v", name, o.Path, err)
+				logf("files: %s: ignoring output %s: %v", name, o.Path, err)
 				continue
 			}
 			if !fi.IsDir() {

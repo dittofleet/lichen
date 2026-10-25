@@ -38,6 +38,10 @@ var All = []Module{files.Module{}, skills.Module{}, mcp.Module{}}
 // pass before anything is applied or pushed. Callers hold the
 // cross-process lock.
 func Pass(env *core.Env, pull bool) error {
+	// Edits come first: git refuses to pull over uncommitted ones.
+	if _, err := CommitDirect(env); err != nil {
+		return err
+	}
 	if pull {
 		pulled, err := env.Update()
 		if err != nil {
@@ -49,9 +53,6 @@ func Pass(env *core.Env, pull bool) error {
 			}
 		}
 	} else if err := env.Gate(); err != nil {
-		return err
-	}
-	if _, err := CommitDirect(env); err != nil {
 		return err
 	}
 	return run(env, All)
@@ -114,10 +115,10 @@ func CommitDirect(env *core.Env) ([]string, error) {
 // commit under subject, then a pass makes every module match and
 // pushes. An outdated build stops before it writes anything.
 func Change(env *core.Env, subject string, edit func() error) error {
-	if _, err := env.Update(); err != nil {
+	if _, err := CommitDirect(env); err != nil {
 		return err
 	}
-	if _, err := CommitDirect(env); err != nil {
+	if _, err := env.Update(); err != nil {
 		return err
 	}
 	if err := edit(); err != nil {

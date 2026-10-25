@@ -15,6 +15,7 @@ type record struct {
 	File   string `json:"file"`   // source file, relative to files/
 	Root   string `json:"root"`   // the output: this file, or its synced directory
 	Hash   string `json:"hash"`   // of the content lichen wrote
+	Exec   bool   `json:"exec,omitempty"`
 	// Conflict is set while the output and its source both changed in
 	// ways that don't merge: neither is written until it is resolved.
 	Conflict bool `json:"conflict,omitempty"`
@@ -78,7 +79,7 @@ func hashOf(b []byte) string {
 }
 
 // remember records content as what lichen wrote (or found in sync) at an
-// output, keeping the content for later comparisons.
+// output, which is there, keeping the content for later comparisons.
 func (s *state) remember(w want, content []byte) error {
 	d, err := stateDir()
 	if err != nil {
@@ -94,7 +95,7 @@ func (s *state) remember(w want, content []byte) error {
 			return err
 		}
 	}
-	s.Outputs[w.path] = &record{Source: w.source, File: w.file, Root: w.root, Hash: h}
+	s.Outputs[w.path] = &record{Source: w.source, File: w.file, Root: w.root, Hash: h, Exec: isExec(w.path)}
 	return nil
 }
 

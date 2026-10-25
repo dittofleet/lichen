@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"lichen/internal/config"
@@ -44,16 +45,22 @@ func (e *Env) hasUpstream() bool {
 	return err == nil
 }
 
-// abortStaleRebase recovers a sync folder left mid-rebase by a conflicted
-// or interrupted pull. A wedged repo would otherwise block every commit
-// and pull until a human runs `git rebase --abort`.
-func (e *Env) abortStaleRebase() {
+func (e *Env) rebasing() bool {
 	for _, d := range []string{"rebase-merge", "rebase-apply"} {
 		if _, err := os.Stat(e.Path(".git", d)); err == nil {
-			e.Log.Printf("aborting a stale rebase in the sync folder")
-			e.Git("rebase", "--abort")
-			return
+			return true
 		}
+	}
+	return false
+}
+
+// abortStaleRebase recovers a sync folder left mid-rebase by a failed or
+// interrupted pull. A wedged repo would otherwise block every commit and
+// pull until a human runs `git rebase --abort`.
+func (e *Env) abortStaleRebase() {
+	if e.rebasing() {
+		e.Log.Printf("aborting a stale rebase in the sync folder")
+		e.Git("rebase", "--abort")
 	}
 }
 
@@ -68,11 +75,61 @@ func (e *Env) pull() error {
 	if e.Origin() == "" || !e.hasUpstream() {
 		return nil
 	}
-	if _, err := e.Git("pull", "--rebase", "-X", "theirs", "--quiet"); err != nil {
+	_, err := e.Git("pull", "--rebase", "-X", "theirs", "--quiet")
+	if err != nil && e.rebasing() {
+		err = e.settleRebase()
+	}
+	if err != nil {
 		e.abortStaleRebase()
 		return err
 	}
 	return nil
+}
+
+// settleRebase finishes a rebase stopped on what -X theirs leaves
+// unresolved: a file edited on one side and deleted on the other. The
+// edit wins, whichever side made it (the files module then brings back
+// the source it belongs to), so an edit is never lost to a deletion, and
+// the pull never wedges on one.
+func (e *Env) settleRebase() error {
+	for range 100 {
+		if !e.rebasing() {
+			return nil
+		}
+		out, err := e.Git("diff", "--name-only", "-z", "--diff-filter=U")
+		if err != nil {
+			return err
+		}
+		unmerged := split0(out)
+		if len(unmerged) == 0 {
+			return errors.New("the pull stopped on something other than a conflict")
+		}
+		for _, p := range unmerged {
+			// Mid-rebase, theirs is the local commit being replayed.
+			if _, err := e.Git("checkout", "--theirs", "--", p); err != nil {
+				if _, err := e.Git("checkout", "--ours", "--", p); err != nil {
+					return err
+				}
+			}
+			if _, err := e.Git("add", "--", p); err != nil {
+				return err
+			}
+		}
+		if _, err := e.Git("-c", "core.editor=true", "rebase", "--continue"); err != nil {
+			// The local commit had nothing else in it.
+			if _, staged := e.Git("diff", "--cached", "--quiet"); staged != nil {
+				return err
+			}
+			if _, err := e.Git("rebase", "--skip"); err != nil && e.rebasing() {
+				return err
+			}
+		}
+	}
+	return errors.New("the pull would not settle")
+}
+
+func split0(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool { return r == 0 })
 }
 
 // Update brings the sync folder up to date with what the other devices
@@ -96,7 +153,7 @@ func (e *Env) Update() (pulled bool, err error) {
 // subject, if there is anything to commit. The sync folder belongs to
 // lichen: whatever is in it is meant to sync.
 func (e *Env) Commit(subject, body string) error {
-	if _, err := e.Git("add", "-A"); err != nil {
+	if err := e.stage(); err != nil {
 		return err
 	}
 	if _, err := e.Git("diff", "--cached", "--quiet"); err == nil {
@@ -118,14 +175,35 @@ func (e *Env) Commit(subject, body string) error {
 // Changes stages every edit made in the sync folder since the last
 // commit, and lists the paths, for describing edits made there directly.
 func (e *Env) Changes() ([]string, error) {
-	if _, err := e.Git("add", "-A"); err != nil {
+	if err := e.stage(); err != nil {
 		return nil, err
 	}
 	out, err := e.Git("diff", "--cached", "--name-only", "-z")
-	if err != nil {
-		return nil, err
+	return split0(out), err
+}
+
+// stage stages everything in the sync folder but what lichen never syncs
+// (config.Ignored). A synced directory may bring a .gitignore of its
+// own, and what it ignores syncs all the same.
+func (e *Env) stage() error {
+	if _, err := e.Git("add", "-A"); err != nil {
+		return err
 	}
-	return strings.FieldsFunc(out, func(r rune) bool { return r == 0 }), nil
+	out, err := e.Git("ls-files", "-z", "--others", "--ignored", "--exclude-standard")
+	if err != nil {
+		return err
+	}
+	var add []string
+	for _, p := range split0(out) {
+		if !slices.ContainsFunc(strings.Split(p, "/"), config.Ignored) {
+			add = append(add, p)
+		}
+	}
+	if len(add) == 0 {
+		return nil
+	}
+	_, err = e.Git(append([]string{"add", "-f", "--"}, add...)...)
+	return err
 }
 
 // Push publishes local commits and nudges the other devices. A racing
@@ -187,6 +265,11 @@ func Setup(url string) (string, error) {
 			return dir, err
 		}
 	} else if _, err := gitutil.Run(filepath.Dir(dir), "clone", "--quiet", url, dir); err != nil {
+		return dir, err
+	}
+	// Synced files may be private ones (~/.netrc, say): the folder is
+	// this user's alone, whatever modes they arrive with.
+	if err := os.Chmod(dir, 0o700); err != nil {
 		return dir, err
 	}
 	settings := filepath.Join(dir, SettingsFile)

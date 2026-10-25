@@ -1,7 +1,6 @@
 package files
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -89,8 +88,11 @@ func Add(env *core.Env, paths []string, name string, only []string) ([]string, e
 		if err := validName(n); err != nil {
 			return nil, err
 		}
-		if _, ok := c.Sources[n]; ok {
-			return nil, fmt.Errorf("a source named %s already exists: pick another with --name", n)
+		// One source inside another would have its files synced twice.
+		for e := range c.Sources {
+			if config.Within(n, e) || config.Within(e, n) {
+				return nil, fmt.Errorf("%s would overlap the source %s: pick another name with --name", n, e)
+			}
 		}
 		if _, err := os.Lstat(sourcePath(env, n)); err == nil {
 			return nil, fmt.Errorf("%s/%s already exists: pick another name with --name", SourcesDir, n)
@@ -112,14 +114,14 @@ func Add(env *core.Env, paths []string, name string, only []string) ([]string, e
 			if err != nil {
 				return nil, err
 			}
-			if err := writeFile(sourcePath(env, file), content, isExec(out)); err != nil {
+			if err := writeFile(sourcePath(env, file), content, isExec(out), false); err != nil {
 				return nil, err
 			}
 			if err := st.remember(want{source: n, file: file, path: out, root: abs, dir: rel != ""}, content); err != nil {
 				return nil, err
 			}
 		}
-		c.Sources[n] = Source{To: []Output{{Path: config.ContractHome(abs), Only: only}}}
+		c.Sources[n] = Source{To: []Output{{Path: config.ContractHome(abs), Only: only}}, Private: fi.Mode().Perm()&0o077 == 0}
 		delete(dead, n)
 		added = append(added, n)
 	}
@@ -133,7 +135,9 @@ func Add(env *core.Env, paths []string, name string, only []string) ([]string, e
 }
 
 // AddOutput gives an existing source another output. A file already
-// there is replaced by the source on the next pass.
+// there is replaced by the source on the next pass. A directory there
+// may only hold files the source has: any other file in it would join
+// the source, and go everywhere.
 func AddOutput(env *core.Env, source, p string, only []string) error {
 	c, err := loadConfig(env)
 	if err != nil {
@@ -149,6 +153,14 @@ func AddOutput(env *core.Env, source, p string, only []string) error {
 	}
 	if n, _, ok := owner(c, abs); ok {
 		return fmt.Errorf("%s already syncs, through %s", config.ContractHome(abs), n)
+	}
+	if fi, err := os.Stat(sourcePath(env, source)); err == nil && fi.IsDir() {
+		has := listFiles(sourcePath(env, source))
+		for _, rel := range listFiles(abs) {
+			if !slices.Contains(has, rel) {
+				return fmt.Errorf("%s holds files %s doesn't have (%s): move them away first", config.ContractHome(abs), source, rel)
+			}
+		}
 	}
 	s.To = append(s.To, Output{Path: config.ContractHome(abs), Only: only})
 	c.Sources[source] = s
@@ -237,9 +249,10 @@ func Recover(env *core.Env, args []string) ([]string, error) {
 	for _, a := range args {
 		name, ok := buriedAs(dead, a)
 		if ok {
-			if err := recoverSource(env, c, name); err != nil {
+			if _, err := restore(env, path.Join(SourcesDir, name)); err != nil {
 				return nil, err
 			}
+			c.Sources[name] = dead[name]
 			delete(dead, name)
 			recovered = append(recovered, name)
 			continue
@@ -266,7 +279,7 @@ func Recover(env *core.Env, args []string) ([]string, error) {
 	return recovered, saveDeleted(env, dead)
 }
 
-func buriedAs(dead map[string][]string, a string) (string, bool) {
+func buriedAs(dead map[string]Source, a string) (string, bool) {
 	if _, ok := dead[a]; ok {
 		return a, true
 	}
@@ -274,37 +287,14 @@ func buriedAs(dead map[string][]string, a string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	for name, outs := range dead {
-		for _, o := range outs {
-			if root, err := (Output{Path: o}).root(); err == nil && root == abs {
+	for name, s := range dead {
+		for _, o := range s.To {
+			if root, err := o.root(); err == nil && root == abs {
 				return name, true
 			}
 		}
 	}
 	return "", false
-}
-
-// recoverSource restores a buried source and its files.json entry from
-// the commit before the one that deleted it.
-func recoverSource(env *core.Env, c *fileConfig, name string) error {
-	commit, err := restore(env, path.Join(SourcesDir, name))
-	if err != nil {
-		return err
-	}
-	old, err := env.Git("show", commit+"^:"+ConfigFile)
-	if err != nil {
-		return err
-	}
-	var prev fileConfig
-	if err := json.Unmarshal([]byte(old), &prev); err != nil {
-		return err
-	}
-	s, ok := prev.Sources[name]
-	if !ok {
-		return fmt.Errorf("%s was not in %s before it was deleted", name, ConfigFile)
-	}
-	c.Sources[name] = s
-	return nil
 }
 
 // restore brings file back from just before the commit that deleted
@@ -356,7 +346,7 @@ func Resolve(env *core.Env, p, keep string) error {
 	if err != nil {
 		return err
 	}
-	if err := writeFile(to, content, isExec(from)); err != nil {
+	if err := writeFile(to, content, isExec(from), false); err != nil {
 		return err
 	}
 	if err := st.remember(rec.want(abs), content); err != nil {

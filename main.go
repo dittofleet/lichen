@@ -240,6 +240,19 @@ func tilde(paths ...string) string {
 	return strings.Join(out, " ")
 }
 
+// targets shows arguments that are a source name or a path, as files
+// remove, only and recover take them: a name stays as it is.
+func targets(args ...string) string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		out[i] = a
+		if strings.HasPrefix(a, "/") || strings.HasPrefix(a, "~") || strings.HasPrefix(a, ".") {
+			out[i] = tilde(a)
+		}
+	}
+	return strings.Join(out, " ")
+}
+
 // groupList parses a comma list of groups, as --only takes them.
 func groupList(s string) ([]string, error) {
 	var groups []string

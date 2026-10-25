@@ -35,16 +35,25 @@ type pass struct {
 // Reconcile brings this device's outputs and the sources together:
 // first local changes are captured into the sources (edits, deletions,
 // and new files in a synced directory), then every output is brought up
-// to date, with edits on both sides merged.
+// to date, with edits on both sides merged. Whatever it got done is
+// recorded and committed, even when a step fails.
 func (Module) Reconcile(env *core.Env) error {
 	p, err := newPass(env)
 	if err != nil {
 		return err
 	}
+	err = p.reconcile()
+	return errors.Join(err, p.st.save(), p.commit())
+}
+
+func (p *pass) reconcile() error {
+	if err := p.revive(); err != nil {
+		return err
+	}
 	if err := p.buryMissing(); err != nil {
 		return err
 	}
-	ws, dirs := wants(env, p.cfg)
+	ws, dirs := wants(p.env, p.cfg, p.env.Log)
 	if err := p.captureNew(ws, dirs); err != nil {
 		return err
 	}
@@ -53,18 +62,12 @@ func (Module) Reconcile(env *core.Env) error {
 	}
 	if len(p.changes) > 0 {
 		// A capture can delete a source or add files to one.
-		ws, dirs = wants(env, p.cfg)
+		ws, dirs = wants(p.env, p.cfg, nil)
 	}
 	if err := p.apply(ws); err != nil {
 		return err
 	}
-	if err := p.release(ws, dirs); err != nil {
-		return err
-	}
-	if err := p.st.save(); err != nil {
-		return err
-	}
-	return p.commit()
+	return p.release(ws, dirs)
 }
 
 func newPass(env *core.Env) (*pass, error) {
@@ -96,6 +99,36 @@ func (p *pass) commit() error {
 		body = strings.Join(p.changes, "\n")
 	}
 	return p.env.Commit(subject, body)
+}
+
+// revive brings back a deleted source whose files came back: edited on
+// one device while deleted on another, which the sync repo's merge
+// settles in the edit's favour.
+func (p *pass) revive() error {
+	dead, err := loadDeleted(p.env)
+	if err != nil {
+		return err
+	}
+	revived := false
+	for _, name := range slices.Sorted(maps.Keys(dead)) {
+		if _, ok := p.cfg.Sources[name]; ok {
+			continue
+		}
+		if _, err := os.Stat(sourcePath(p.env, name)); err != nil {
+			continue
+		}
+		p.cfg.Sources[name] = dead[name]
+		delete(dead, name)
+		revived = true
+		p.note("bring back " + name + ", edited while it was deleted")
+	}
+	if !revived {
+		return nil
+	}
+	if err := p.cfg.save(p.env); err != nil {
+		return err
+	}
+	return saveDeleted(p.env, dead)
 }
 
 // buryMissing handles sources deleted in the sync folder directly: one
@@ -140,7 +173,7 @@ func (p *pass) captureNew(ws map[string]want, dirs map[string]string) error {
 				continue
 			}
 			w := want{source: source, file: source + "/" + rel, path: out, root: root, dir: true}
-			if err := writeFile(sourcePath(p.env, w.file), content, isExec(out)); err != nil {
+			if err := writeFile(sourcePath(p.env, w.file), content, isExec(out), false); err != nil {
 				return err
 			}
 			if err := p.st.remember(w, content); err != nil {
@@ -160,7 +193,8 @@ func (p *pass) capture(ws map[string]want) error {
 	for _, out := range slices.Sorted(maps.Keys(ws)) {
 		w := ws[out]
 		rec := p.st.Outputs[out]
-		if rec == nil || rec.Conflict {
+		// Behind a symlink, a missing file says nothing about deletion.
+		if rec == nil || rec.Conflict || underSymlink(p.home, out) {
 			continue
 		}
 		src, err := os.ReadFile(sourcePath(p.env, w.file))
@@ -174,14 +208,14 @@ func (p *pass) capture(ws map[string]want) error {
 			}
 			continue
 		}
-		if err != nil || !fi.Mode().IsRegular() || underSymlink(p.home, out) {
+		if err != nil || !fi.Mode().IsRegular() {
 			continue
 		}
 		live, err := os.ReadFile(out)
 		if err != nil || hashOf(live) == rec.Hash {
 			continue
 		}
-		if err := writeFile(sourcePath(p.env, w.file), live, isExec(out)); err != nil {
+		if err := writeFile(sourcePath(p.env, w.file), live, isExec(out), false); err != nil {
 			return err
 		}
 		if err := p.st.remember(w, live); err != nil {
@@ -262,7 +296,7 @@ func (p *pass) apply(ws map[string]want) error {
 				continue
 			}
 		}
-		if err := writeFile(out, src, isExec(srcPath)); err != nil {
+		if err := writeFile(out, src, isExec(srcPath), p.cfg.Sources[w.source].Private); err != nil {
 			return err
 		}
 		if err := p.st.remember(w, src); err != nil {
@@ -282,6 +316,9 @@ func (p *pass) reconcileExisting(w want, rec *record, live, src []byte) (bool, e
 	out := w.path
 	switch {
 	case bytes.Equal(live, src):
+		if err := p.syncExec(w, rec); err != nil {
+			return true, err
+		}
 		return true, p.st.remember(w, src)
 	case rec == nil:
 		// A file this device had before it synced this one: the synced
@@ -309,50 +346,104 @@ func (p *pass) reconcileExisting(w want, rec *record, live, src []byte) (bool, e
 		}
 		return true, nil
 	}
-	if err := writeFile(out, merged, isExec(out)); err != nil {
+	if err := writeFile(out, merged, isExec(out), false); err != nil {
 		return true, err
 	}
-	if err := writeFile(sourcePath(p.env, w.file), merged, isExec(out)); err != nil {
+	if err := writeFile(sourcePath(p.env, w.file), merged, isExec(out), false); err != nil {
 		return true, err
 	}
 	p.note("merge " + config.ContractHome(out))
 	return true, p.st.remember(w, merged)
 }
 
+// syncExec carries a change of the executable bit alone, whichever side
+// made it.
+func (p *pass) syncExec(w want, rec *record) error {
+	src := sourcePath(p.env, w.file)
+	here := isExec(w.path)
+	if here == isExec(src) {
+		return nil
+	}
+	if rec != nil && here != rec.Exec {
+		p.note("chmod " + config.ContractHome(w.path))
+		return setExec(src, here)
+	}
+	return setExec(w.path, !here)
+}
+
 // release handles outputs lichen wrote here that are no longer meant for
 // this device. A file deleted on another device is deleted here too,
-// unless it was edited here since. Anything else (a source that stopped
-// syncing, an output moved or scoped away from this device) stays, as a
-// plain file lichen no longer touches.
+// unless it was edited here since: then the edit wins, and the file
+// comes back everywhere. Anything else (a source that stopped syncing,
+// an output moved or scoped away from this device) stays, as a plain
+// file lichen no longer touches.
 func (p *pass) release(ws map[string]want, dirs map[string]string) error {
 	dead, err := loadDeleted(p.env)
 	if err != nil {
 		return err
 	}
-	for _, out := range slices.Sorted(maps.Keys(p.st.Outputs)) {
-		if _, ok := ws[out]; ok {
-			continue
-		}
-		rec := p.st.Outputs[out]
-		delete(p.st.Outputs, out)
+	deleted := func(out string, rec *record) bool {
 		_, entryLives := p.cfg.Sources[rec.Source]
 		_, buried := dead[rec.Source]
-		rootLives := dirs[rec.Root] == rec.Source
-		deleted := buried && !entryLives || entryLives && rootLives && rec.Root != out
-		fi, err := os.Lstat(out)
-		if err != nil || !fi.Mode().IsRegular() {
-			continue
+		return buried && !entryLives || entryLives && dirs[rec.Root] == rec.Source && rec.Root != out
+	}
+	var released []string
+	for _, out := range slices.Sorted(maps.Keys(p.st.Outputs)) {
+		if _, ok := ws[out]; !ok {
+			released = append(released, out)
 		}
-		if !deleted {
-			p.env.Log.Printf("files: %s no longer syncs here, left as a plain file", config.ContractHome(out))
+	}
+
+	revived := map[string]bool{}
+	for _, out := range released {
+		rec := p.st.Outputs[out]
+		if !deleted(out, rec) || !regular(out) || underSymlink(p.home, out) {
 			continue
 		}
 		live, err := os.ReadFile(out)
-		if err != nil {
+		if err != nil || hashOf(live) == rec.Hash {
 			continue
 		}
-		if hashOf(live) != rec.Hash {
-			p.env.Log.Printf("files: %s was deleted on another device, but it was edited here: kept, no longer synced", config.ContractHome(out))
+		if s, ok := dead[rec.Source]; ok {
+			p.cfg.Sources[rec.Source] = s
+			delete(dead, rec.Source)
+		}
+		if err := writeFile(sourcePath(p.env, rec.File), live, isExec(out), false); err != nil {
+			return err
+		}
+		if err := p.st.remember(rec.want(out), live); err != nil {
+			return err
+		}
+		revived[rec.Source] = true
+		p.note("bring back " + config.ContractHome(out) + ", edited here while it was deleted elsewhere")
+	}
+	if len(revived) > 0 {
+		if err := p.cfg.save(p.env); err != nil {
+			return err
+		}
+		if err := saveDeleted(p.env, dead); err != nil {
+			return err
+		}
+	}
+
+	for _, out := range released {
+		rec := p.st.Outputs[out]
+		if revived[rec.Source] {
+			continue // the next pass syncs the rest of it again
+		}
+		delete(p.st.Outputs, out)
+		if !regular(out) {
+			continue
+		}
+		if !deleted(out, rec) {
+			p.env.Log.Printf("files: %s no longer syncs here, left as a plain file", config.ContractHome(out))
+			continue
+		}
+		if underSymlink(p.home, out) {
+			p.env.Log.Printf("files: NOT deleting %s (a symlink sits above it), no longer synced", config.ContractHome(out))
+			continue
+		}
+		if live, err := os.ReadFile(out); err != nil || hashOf(live) != rec.Hash {
 			continue
 		}
 		to, err := backup.Discard(out, p.env.Settings.Backups)
@@ -362,13 +453,18 @@ func (p *pass) release(ws map[string]want, dirs map[string]string) error {
 		p.env.Log.Printf("files: deleted %s (deleted on another device)%s", config.ContractHome(out), keptAt(to))
 		if rec.Root != out {
 			stop := filepath.Dir(rec.Root)
-			if rootLives {
+			if dirs[rec.Root] == rec.Source {
 				stop = rec.Root
 			}
 			removeEmptyParents(filepath.Dir(out), stop)
 		}
 	}
 	return nil
+}
+
+func regular(path string) bool {
+	fi, err := os.Lstat(path)
+	return err == nil && fi.Mode().IsRegular()
 }
 
 func keptAt(to string) string {
@@ -407,18 +503,36 @@ func merge3(base, ours, theirs []byte) ([]byte, bool) {
 }
 
 // writeFile replaces path's content, keeping an existing file's
-// permissions apart from the executable bit, which follows exec.
-func writeFile(path string, content []byte, exec bool) error {
+// permissions apart from the executable bit, which follows exec. A new
+// file is readable by anyone, unless private: then it and any directory
+// made for it are the owner's alone.
+func writeFile(path string, content []byte, exec, private bool) error {
 	perm := os.FileMode(0o644)
+	if private {
+		perm = 0o600
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return err
+		}
+	}
 	if fi, err := os.Stat(path); err == nil {
 		perm = fi.Mode().Perm()
 	}
+	return config.WriteFile(path, content, execPerm(perm, exec))
+}
+
+func execPerm(perm os.FileMode, exec bool) os.FileMode {
 	if exec {
-		perm |= (perm & 0o444) >> 2
-	} else {
-		perm &^= 0o111
+		return perm | (perm&0o444)>>2
 	}
-	return config.WriteFile(path, content, perm)
+	return perm &^ 0o111
+}
+
+func setExec(path string, exec bool) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	return os.Chmod(path, execPerm(fi.Mode().Perm(), exec))
 }
 
 func isExec(path string) bool {
@@ -456,7 +570,7 @@ func Watched(env *core.Env) (files, trees []string) {
 	if err != nil {
 		return nil, nil
 	}
-	ws, dirs := wants(env, c)
+	ws, dirs := wants(env, c, nil)
 	for out, w := range ws {
 		if !w.dir {
 			files = append(files, out)

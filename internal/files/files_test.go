@@ -447,9 +447,24 @@ func TestExecutableBitSyncs(t *testing.T) {
 	os.Chmod(a.path("bin/hello"), 0o755)
 	a.add("bin/hello")
 	b := newDevice(t, remote, "banana")
-	if fi, err := os.Stat(b.path("bin/hello")); err != nil || fi.Mode().Perm()&0o100 == 0 {
-		t.Fatalf("bin/hello on banana is not executable: %v %v", fi.Mode(), err)
+	executable := func(d *device, want bool) {
+		t.Helper()
+		if fi, err := os.Stat(d.path("bin/hello")); err != nil || (fi.Mode().Perm()&0o100 != 0) != want {
+			t.Fatalf("bin/hello on %s: mode %v, want executable %v (%v)", d.name, fi.Mode(), want, err)
+		}
 	}
+	executable(b, true)
+
+	// The bit alone changing syncs too, from either side.
+	os.Chmod(b.path("bin/hello"), 0o644)
+	b.sync()
+	a.sync()
+	executable(a, false)
+	os.Chmod(a.path("lichen/files/bin/hello"), 0o755)
+	a.sync()
+	b.sync()
+	executable(a, true)
+	executable(b, true)
 }
 
 func TestSymlinksAreLeftAlone(t *testing.T) {
@@ -505,18 +520,77 @@ func TestDeletingOneOutputDeletesTheSource(t *testing.T) {
 	}
 }
 
-func TestEditedCopyOfADeletedFileIsKept(t *testing.T) {
+// An edit beats a deletion made elsewhere at the same time: the file
+// comes back everywhere, edited.
+func TestEditBeatsDeletion(t *testing.T) {
 	remote := newRemote(t)
 	a := newDevice(t, remote, "apple")
 	a.write(".zshrc", "v1\n")
 	a.add(".zshrc")
+	a.write(".claude/commands/one.md", "1")
+	a.write(".claude/commands/two.md", "2")
+	a.add(".claude/commands")
 	b := newDevice(t, remote, "banana")
 
 	os.Remove(a.path(".zshrc"))
+	os.Remove(a.path(".claude/commands/two.md"))
 	a.sync()
 	b.write(".zshrc", "edited on banana\n")
+	b.write(".claude/commands/two.md", "2, edited on banana")
 	b.sync()
-	expect(t, b, ".zshrc", "edited on banana\n")
+	a.sync()
+	for _, d := range []*device{a, b} {
+		expect(t, d, ".zshrc", "edited on banana\n")
+		expect(t, d, ".claude/commands/two.md", "2, edited on banana")
+	}
+	// And it is synced again, not a leftover.
+	a.write(".zshrc", "v3\n")
+	a.sync()
+	b.sync()
+	b.sync()
+	expect(t, b, ".zshrc", "v3\n")
+}
+
+// The same race, with the edit already committed while offline: the
+// sync repo's merge gives the edit the win too, either way round, and
+// syncing goes on.
+func TestEditBeatsDeletionAcrossAnOfflineCommit(t *testing.T) {
+	for _, editorRebases := range []bool{true, false} {
+		remote := newRemote(t)
+		a := newDevice(t, remote, "apple")
+		a.write(".zshrc", "v1\n")
+		a.add(".zshrc")
+		b := newDevice(t, remote, "banana")
+
+		// The device that is offline rebases its commit when it is back.
+		offline, online := b, a
+		if !editorRebases {
+			offline, online = a, b
+		}
+		os.Rename(remote, remote+".away")
+		if editorRebases {
+			b.write(".zshrc", "edited on banana\n")
+		} else {
+			os.Remove(a.path(".zshrc"))
+		}
+		offline.sync()
+		os.Rename(remote+".away", remote)
+		if editorRebases {
+			os.Remove(a.path(".zshrc"))
+		} else {
+			b.write(".zshrc", "edited on banana\n")
+		}
+		online.sync()
+		offline.sync()
+		online.sync()
+		for _, d := range []*device{a, b} {
+			expect(t, d, ".zshrc", "edited on banana\n")
+		}
+		a.write(".zshrc", "later\n")
+		a.sync()
+		b.sync()
+		expect(t, b, ".zshrc", "later\n")
+	}
 }
 
 func TestRecoverOneFileOfADirectory(t *testing.T) {
@@ -549,6 +623,104 @@ func TestOverlappingAddsAreRefused(t *testing.T) {
 		if _, err := files.Add(env, []string{p}, "", nil); err == nil {
 			t.Errorf("adding %s: expected a refusal", p)
 		}
+	}
+
+	// Nor may one source's name sit inside another's (claude/commands
+	// here): ~/claude would be the source claude.
+	a.write("claude/notes.md", "n")
+	a.write(".claude/settings.json", "{}")
+	for p, name := range map[string]string{"~/claude": "", "~/.claude/settings.json": "claude/commands/x"} {
+		if _, err := files.Add(env, []string{p}, name, nil); err == nil {
+			t.Errorf("adding %s as %q: expected a refusal", p, name)
+		}
+	}
+
+	// A directory output may not bring files of its own along.
+	a.write(".codex/prompts/mine.md", "m")
+	if err := files.AddOutput(env, "claude/commands", "~/.codex/prompts", nil); err == nil {
+		t.Error("adding an output over a directory with other files: expected a refusal")
+	}
+}
+
+// Files only the owner may read arrive that way on every device, and
+// the sync folder is no one else's either.
+func TestPrivateFilesStayPrivate(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write(".netrc", "machine example.com password hunter2\n")
+	os.Chmod(a.path(".netrc"), 0o600)
+	a.add(".netrc")
+	b := newDevice(t, remote, "banana")
+	for path, want := range map[string]os.FileMode{b.path(".netrc"): 0o600, b.path("lichen"): 0o700} {
+		if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != want {
+			t.Errorf("%s: mode %v, want %v (%v)", path, fi.Mode().Perm(), want, err)
+		}
+	}
+}
+
+// A synced directory's own .gitignore keeps nothing out of the sync.
+func TestGitignoreInASyncedDirectory(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write(".config/foo/.gitignore", "*.log\n")
+	a.write(".config/foo/app.log", "log\n")
+	a.add(".config/foo")
+	b := newDevice(t, remote, "banana")
+	expect(t, b, ".config/foo/app.log", "log\n")
+	expect(t, b, ".config/foo/.gitignore", "*.log\n")
+}
+
+// A CLI edit runs on the freshest state even with an edit made in the
+// sync folder directly still uncommitted (git won't pull over one).
+func TestChangeOverAnUncommittedEdit(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write(".zshrc", "z\n")
+	a.add(".zshrc")
+	b := newDevice(t, remote, "banana")
+	a.write(".vimrc", "v\n")
+	a.add(".vimrc")
+	b.write("lichen/files/zshrc", "edited in the sync folder\n")
+	b.change(func(env *core.Env) error {
+		entries, err := files.List(env)
+		if err != nil || len(entries) != 2 {
+			t.Errorf("the edit saw %d sources (%v), want 2", len(entries), err)
+		}
+		return err
+	})
+	expect(t, b, ".zshrc", "edited in the sync folder\n")
+	expect(t, b, ".vimrc", "v\n")
+}
+
+// What sits behind a symlink is not lichen's to judge: a file missing
+// there is not a deletion, and a deletion elsewhere doesn't reach it.
+func TestNothingThroughSymlinks(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write(".config/tool/one", "1")
+	a.write(".config/tool/two", "2")
+	a.add(".config/tool")
+	b := newDevice(t, remote, "banana")
+
+	// apple's .config becomes a link to an empty directory.
+	os.Rename(a.path(".config"), a.path("config-aside"))
+	os.MkdirAll(a.path("empty"), 0o755)
+	os.Symlink(a.path("empty"), a.path(".config"))
+	a.sync()
+	b.sync()
+	expect(t, b, ".config/tool/one", "1")
+
+	// banana's .config moves out of home, linked back; apple deletes one.
+	outside := t.TempDir()
+	os.Rename(b.path(".config"), filepath.Join(outside, "config"))
+	os.Symlink(filepath.Join(outside, "config"), b.path(".config"))
+	os.Remove(a.path(".config"))
+	os.Rename(a.path("config-aside"), a.path(".config"))
+	os.Remove(a.path(".config/tool/one"))
+	a.sync()
+	b.sync()
+	if _, err := os.Stat(filepath.Join(outside, "config/tool/one")); err != nil {
+		t.Fatalf("deleted through banana's symlink: %v", err)
 	}
 }
 

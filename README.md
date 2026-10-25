@@ -89,13 +89,15 @@ lichen files add ~/.config/agents.md --to claude/CLAUDE.md --only linux
 ```
 
 Edit any of them and the others follow. When a device joins with its own
-copy of a file that is already synced, the synced version replaces it.
+copy of a file that is already synced, the synced version replaces it. A
+file only you can read (`~/.netrc`, say) is written that way everywhere.
 
 ### Deleting and stopping
 
-Deleting a synced file deletes it on every device. A file deleted by
-mistake comes back from the sync folder's history, on all devices at
-once:
+Deleting a synced file deletes it on every device, unless another device
+edits it at the same time: then the edit wins, and the file comes back
+everywhere. A file deleted by mistake comes back from the sync folder's
+history, on all devices at once:
 
 ```sh
 lichen files recover ~/.zshrc
