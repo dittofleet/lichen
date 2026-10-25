@@ -92,6 +92,31 @@ Edit any of them and the others follow. When a device joins with its own
 copy of a file that is already synced, the synced version replaces it. A
 file only you can read (`~/.netrc`, say) is written that way everywhere.
 
+### Inserts
+
+A source can take in the lines of others, for one file put together
+differently on each device. Write the pieces as files of their own in
+`~/lichen/files`, and insert them with lines starting with `§`:
+
+```
+export EDITOR=vim
+§ zsh/aliases
+§ zsh/mac if mac
+§ zsh/work if lychee, servers
+```
+
+`~/.zshrc` gets `zsh/aliases` everywhere, `zsh/mac` on Macs, and
+`zsh/work` on lychee and the servers: `if` takes devices and groups. A
+piece can insert others, and needs no output of its own. A line meant to
+start with `§` starts with `§§` in the source.
+
+Outputs show none of this, and editing them still syncs: lichen knows
+which source each line came from, and an edited line goes back there.
+New lines go to the source of the lines around them. Where an insert
+begins or ends, they could belong to either, so lichen asks: it leaves
+the file as it is on that device (a notification and `lichen status` say
+so) until `lichen resolve` says which.
+
 ### Deleting and stopping
 
 Deleting a synced file deletes it on every device, unless another device
@@ -111,10 +136,12 @@ device out of its scope.
 
 They merge, as long as they touch different lines. Edits to the same
 lines are a conflict: lichen leaves the file as it is on that device and
-says so in `lichen status` and the log, until you pick one:
+says so (a notification, `lichen status`, the log) until you pick one.
+`lichen resolve` walks through whatever waits, or settles one file:
 
 ```sh
-lichen files resolve ~/.zshrc --keep here     # or --keep synced
+lichen resolve ~/.zshrc --keep here      # or --keep synced
+lichen resolve ~/.zshrc --into zsh/mac   # where its new lines go
 ```
 
 ### Backups

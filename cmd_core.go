@@ -144,10 +144,14 @@ func cmdStatus() error {
 		}
 		fmt.Printf("%s %s\n", bold("mcp:"), strings.Join(names, ", "))
 	}
-	if conflicts := files.Conflicts(); len(conflicts) > 0 {
-		fmt.Printf("\n%s edited here and on another device at once:\n", paint("31", "conflicts:"))
-		for _, c := range conflicts {
-			fmt.Printf("  %s  %s\n", c, dim("lichen files resolve "+c+" --keep here|synced"))
+	if holds := files.Holds(); len(holds) > 0 {
+		fmt.Printf("\n%s edits here that lichen can't place on its own (lichen resolve):\n", paint("31", "waiting:"))
+		for _, h := range holds {
+			why := "new lines that could go in more than one source"
+			if h.Conflict {
+				why = "a conflict"
+			}
+			fmt.Printf("  %s  %s\n", h.Path, dim(why))
 		}
 	}
 	if backup.NonEmpty() {

@@ -51,6 +51,8 @@ func main() {
 		err = withEnv(func(env *core.Env) error { return module.Pass(env, true) })
 	case "files":
 		err = cmdFiles(args[1:])
+	case "resolve":
+		err = cmdResolve(args[1:])
 	case "skills":
 		err = cmdSkills(args[1:])
 	case "mcp":
@@ -106,8 +108,6 @@ func usage() {
                                    choose the devices an output is for
   lichen files recover <source|path>...
                                    bring back deleted files, everywhere
-  lichen files resolve <path> --keep here|synced
-                                   settle a file edited on two devices at once
 
   lichen skills add <repo> [--skill <name>]... [--only <groups>]
                                    sync agent skills from a public repo
@@ -130,6 +130,8 @@ func usage() {
   lichen groups add <group> <device>...
   lichen groups remove <group> [<device>...]
 
+  lichen resolve [<path> --keep here|synced | --into <source>]
+                                   settle edits lichen can't place on its own
   lichen sync                      pull and sync everything now
   lichen status                    what lichen is doing on this device
   lichen logs                      follow the daemon log

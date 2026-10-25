@@ -49,22 +49,10 @@ func cmdFiles(args []string) error {
 		}
 		fmt.Printf("recovered %s\n", strings.Join(recovered, ", "))
 		return nil
-	case "resolve":
-		if len(args) != 4 || args[2] != "--keep" {
-			return errors.New("usage: lichen files resolve <path> --keep here|synced")
-		}
-		p, keep := args[1], args[3]
-		if err := change(fmt.Sprintf("resolve %s, keeping %s", tilde(p), keep), func(env *core.Env) error {
-			return files.Resolve(env, p, keep)
-		}); err != nil {
-			return err
-		}
-		fmt.Printf("resolved %s\n", tilde(p))
-		return nil
 	case "list", "ls":
 		return cmdFilesList()
 	}
-	return errors.New("usage: lichen files [add|remove|only|recover|resolve]")
+	return errors.New("usage: lichen files [add|remove|only|recover]")
 }
 
 func cmdFilesAdd(args []string) error {

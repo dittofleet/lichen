@@ -313,15 +313,15 @@ func TestConflictWaitsForResolve(t *testing.T) {
 	b.sync()
 	expect(t, b, ".zshrc", "banana\n")
 	b.use()
-	if c := files.Conflicts(); len(c) != 1 || !strings.HasSuffix(c[0], ".zshrc") {
-		t.Fatalf("conflicts = %v, want ~/.zshrc", c)
+	if h := files.Holds(); len(h) != 1 || !h[0].Conflict || !strings.HasSuffix(h[0].Path, ".zshrc") {
+		t.Fatalf("holds = %v, want a conflict at ~/.zshrc", h)
 	}
 
-	b.change(func(env *core.Env) error { return files.Resolve(env, b.path(".zshrc"), "here") })
+	b.change(func(env *core.Env) error { return files.Resolve(env, b.path(".zshrc"), "here", nil) })
 	a.sync()
 	expect(t, a, ".zshrc", "banana\n")
-	if c := files.Conflicts(); len(c) != 0 {
-		t.Fatalf("conflicts = %v after resolving", c)
+	if h := files.Holds(); len(h) != 0 {
+		t.Fatalf("holds = %v after resolving", h)
 	}
 
 	// And the other way round: the synced version wins.
@@ -329,7 +329,7 @@ func TestConflictWaitsForResolve(t *testing.T) {
 	a.sync()
 	b.write(".zshrc", "banana again\n")
 	b.sync()
-	b.change(func(env *core.Env) error { return files.Resolve(env, b.path(".zshrc"), "synced") })
+	b.change(func(env *core.Env) error { return files.Resolve(env, b.path(".zshrc"), "synced", nil) })
 	expect(t, b, ".zshrc", "apple again\n")
 }
 
