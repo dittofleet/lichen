@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -162,7 +164,11 @@ func cmdStatus() error {
 	return nil
 }
 
-func cmdDevices() error {
+func cmdDevices(args []string) error {
+	asJSON, err := jsonFlag(args)
+	if err != nil {
+		return err
+	}
 	env, err := core.Load(clilog())
 	if err != nil {
 		return err
@@ -170,18 +176,39 @@ func cmdDevices() error {
 	devices, err := events.Devices()
 	if err != nil {
 		devices = []events.Device{{Name: env.Device.Name, Online: true, Self: true}}
-		fmt.Println(dim("(crosstalk is not running: only this device is known)"))
+		if !asJSON {
+			fmt.Println(dim("(crosstalk is not running: only this device and the ones in your groups are known)"))
+		}
+	}
+	// Devices named in groups count too, known to crosstalk or not.
+	known := len(devices)
+	for _, g := range slices.Sorted(maps.Keys(env.Settings.Groups)) {
+		for _, name := range env.Settings.Groups[g] {
+			if !slices.ContainsFunc(devices, func(d events.Device) bool { return d.Name == name }) {
+				devices = append(devices, events.Device{Name: name})
+			}
+		}
+	}
+	if asJSON {
+		groups := env.Settings.Groups
+		if groups == nil {
+			groups = map[string][]string{}
+		}
+		return printJSON(struct {
+			Devices []events.Device     `json:"devices"`
+			Groups  map[string][]string `json:"groups"`
+		}{devices, groups})
 	}
 	width := 0
 	for _, d := range devices {
 		width = max(width, len(d.Name))
 	}
-	for _, d := range devices {
+	for i, d := range devices {
 		note := ""
 		switch {
 		case d.Self:
 			note = " (this device)"
-		case !d.Online:
+		case !d.Online && i < known:
 			note = " (away)"
 		}
 		fmt.Printf("%-*s  %s%s\n", width, d.Name, strings.Join(env.Settings.GroupsOf(d.Name), ", "), dim(note))
