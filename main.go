@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -60,7 +61,7 @@ func main() {
 	case "groups":
 		err = cmdGroups(args[1:])
 	case "devices":
-		err = cmdDevices()
+		err = cmdDevices(args[1:])
 	case "logs":
 		err = cmdLogs()
 	case "daemon":
@@ -97,7 +98,7 @@ func usage() {
 
   lichen setup [<git url>]         set this device up with your sync repo
 
-  lichen files                     show every synced file and where it goes
+  lichen files [--json]            show every synced file and where it goes
   lichen files add <path>... [--name <source>] [--only <groups>]
                                    start syncing files or directories
   lichen files add <path> --to <source> [--only <groups>]
@@ -126,7 +127,7 @@ func usage() {
                                    choose the devices a server is for
   lichen mcp list                  show every synced MCP server
 
-  lichen devices                   show your devices and their groups
+  lichen devices [--json]          show your devices and their groups
   lichen groups add <group> <device>...
   lichen groups remove <group> [<device>...]
 
@@ -293,4 +294,22 @@ func groupList(s string) ([]string, error) {
 		groups = append(groups, g)
 	}
 	return groups, nil
+}
+
+// jsonFlag reads the only flag a listing takes.
+func jsonFlag(args []string) (bool, error) {
+	switch {
+	case len(args) == 0:
+		return false, nil
+	case len(args) == 1 && args[0] == "--json":
+		return true, nil
+	}
+	return false, fmt.Errorf("unexpected %s (only --json goes here)", strings.Join(args, " "))
+}
+
+// printJSON writes v for programs (the Mac app) to read.
+func printJSON(v any) error {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
 }

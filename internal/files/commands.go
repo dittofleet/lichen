@@ -436,6 +436,7 @@ func sourcesOf(q question) []string {
 type Entry struct {
 	Name    string
 	Dir     bool
+	Private bool
 	Outputs []Output
 }
 
@@ -448,7 +449,7 @@ func List(env *core.Env) ([]Entry, error) {
 	var entries []Entry
 	for _, n := range slices.Sorted(maps.Keys(c.Sources)) {
 		fi, err := os.Stat(sourcePath(env, n))
-		entries = append(entries, Entry{Name: n, Dir: err == nil && fi.IsDir(), Outputs: c.Sources[n].To})
+		entries = append(entries, Entry{Name: n, Dir: err == nil && fi.IsDir(), Private: c.Sources[n].Private, Outputs: c.Sources[n].To})
 	}
 	return entries, nil
 }
