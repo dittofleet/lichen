@@ -23,28 +23,13 @@ func cmdSkills(args []string) error {
 		if len(args) < 2 {
 			return fmt.Errorf("usage: lichen skills only <repo> [<group>...]")
 		}
-		return cmdOnly("skills: "+args[1], args[2:], func(groups []string) error { return skills.Scope(args[1], groups) })
+		return cmdOnly("skills: "+args[1], args[2:], func(*core.Env) error { return skills.Only(args[1], args[2:]) })
 	case "update":
 		return cmdSkillsUpdate()
 	case "list", "ls":
 		return cmdSkillsList()
 	}
 	return fmt.Errorf("usage: lichen skills <add|remove|only|list|update>")
-}
-
-// cmdOnly scopes something to devices and groups, as `files only` does.
-func cmdOnly(what string, groups []string, scope func([]string) error) error {
-	for _, g := range groups {
-		if err := core.ValidGroup(g); err != nil {
-			return err
-		}
-	}
-	msg := fmt.Sprintf("%s goes to %s", what, core.Describe(groups))
-	if err := change(msg, func(*core.Env) error { return scope(groups) }); err != nil {
-		return err
-	}
-	fmt.Println(msg)
-	return nil
 }
 
 func cmdSkillsAdd(args []string) error {
@@ -76,21 +61,19 @@ func cmdSkillsAdd(args []string) error {
 	if repo == "" {
 		return fmt.Errorf("usage: lichen skills add <owner/repo> [--skill <name>]... [--only <groups>]")
 	}
-	var key string
+	var src skills.Source
 	var here bool
 	err := change("skills: add "+repo, func(env *core.Env) (err error) {
-		if key, err = skills.AddSource(repo, names, only); err != nil {
-			return err
-		}
-		for _, src := range skills.Configured() {
-			if src.Repo == key {
-				only, here = src.Only, env.Device.In(src.Only)
-			}
-		}
-		return nil
+		src, err = skills.AddSource(repo, names, only)
+		here = env.Device.In(src.Only)
+		return err
 	})
 	if err != nil {
 		return err
+	}
+	if !here {
+		fmt.Printf("syncing %s on %s, so not here\n", src.Repo, core.Describe(src.Only))
+		return nil
 	}
 	installed, err := skills.Installed()
 	if err != nil {
@@ -98,19 +81,15 @@ func cmdSkillsAdd(args []string) error {
 	}
 	var mine []string
 	for _, s := range installed {
-		if s.Repo == key {
+		if s.Repo == src.Repo {
 			mine = append(mine, s.Name)
 		}
 	}
-	switch {
-	case !here:
-		fmt.Printf("syncing %s on %s, so not here\n", key, core.Describe(only))
-		return nil
-	case len(mine) == 0:
-		fmt.Printf("no skills installed from %s (see messages above)\n", key)
+	if len(mine) == 0 {
+		fmt.Printf("no skills installed from %s (see messages above)\n", src.Repo)
 		return nil
 	}
-	fmt.Printf("syncing %d skill(s) from %s: %s\n", len(mine), key, strings.Join(mine, ", "))
+	fmt.Printf("syncing %d skill(s) from %s: %s\n", len(mine), src.Repo, strings.Join(mine, ", "))
 	return nil
 }
 
@@ -174,7 +153,7 @@ func cmdSkillsList() error {
 		switch {
 		case fromRepo[src.Repo]:
 		case !env.Device.In(src.Only):
-			fmt.Println(dim(src.Repo + " (" + core.Describe(src.Only) + ", not this device)"))
+			fmt.Println(notHere(src.Repo, src.Only))
 		default:
 			// Nothing installed yet: a fresh machine before its first
 			// pass, or a repo that failed to clone.
@@ -198,7 +177,7 @@ func cmdMCP(args []string) error {
 		if len(args) < 2 {
 			return fmt.Errorf("usage: lichen mcp only <name> [<group>...]")
 		}
-		return cmdOnly("mcp: "+args[1], args[2:], func(groups []string) error { return mcp.Scope(args[1], groups) })
+		return cmdOnly("mcp: "+args[1], args[2:], func(*core.Env) error { return mcp.Only(args[1], args[2:]) })
 	case "list", "ls":
 		return cmdMCPList()
 	}
@@ -228,13 +207,14 @@ func cmdMCPAdd(args []string) error {
 	if len(rest) == 0 {
 		return usage
 	}
-	s := mcp.Server{Command: rest[0], Args: rest[1:], Only: only}
+	s := mcp.Server{Command: rest[0], Args: rest[1:]}
 	if mcp.IsURL(rest[0]) {
 		if len(rest) > 1 {
 			return fmt.Errorf("a url takes no arguments (got %q)", strings.Join(rest[1:], " "))
 		}
-		s = mcp.Server{URL: rest[0], Only: only}
+		s = mcp.Server{URL: rest[0]}
 	}
+	s.Only = only
 	var here bool
 	err := change("mcp: add "+name, func(env *core.Env) error {
 		here = env.Device.In(only)
@@ -295,6 +275,10 @@ func cmdMCPList() error {
 	}
 	for _, e := range entries {
 		line := fmt.Sprintf("%-*s  %s", width, e.Name, e.Server)
+		if !env.Device.In(e.Server.Only) {
+			fmt.Println(notHere(line, e.Server.Only))
+			continue
+		}
 		where := "not installed here, see: lichen logs"
 		if len(e.Harnesses) > 0 {
 			where = strings.Join(e.Harnesses, ", ")
@@ -302,12 +286,7 @@ func cmdMCPList() error {
 		if len(e.Server.Only) > 0 {
 			where = core.Describe(e.Server.Only) + ": " + where
 		}
-		if !env.Device.In(e.Server.Only) {
-			line = dim(fmt.Sprintf("%s  (%s, not this device)", line, core.Describe(e.Server.Only)))
-		} else {
-			line += "  " + dim("("+where+")")
-		}
-		fmt.Println(line)
+		fmt.Println(line + "  " + dim("("+where+")"))
 	}
 	return nil
 }

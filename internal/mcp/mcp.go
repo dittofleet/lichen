@@ -194,6 +194,8 @@ func Reconcile(env *core.Env) error {
 	if err != nil {
 		return err
 	}
+	// A server for other devices is as good as unlisted here.
+	maps.DeleteFunc(cfg.Servers, func(_ string, s Server) bool { return !env.Device.In(s.Only) })
 	if len(cfg.Servers) == 0 && len(man.Servers) == 0 {
 		return nil
 	}
@@ -206,12 +208,7 @@ func Reconcile(env *core.Env) error {
 	}
 
 	desired := map[string]Server{}
-	elsewhere := map[string]bool{} // listed, but for other devices
 	for _, name := range slices.Sorted(maps.Keys(cfg.Servers)) {
-		if !env.Device.In(cfg.Servers[name].Only) {
-			elsewhere[name] = true
-			continue
-		}
 		if err := validate(name, cfg.Servers[name]); err != nil {
 			lg.Printf("mcp: %v", err)
 			continue
@@ -281,7 +278,7 @@ func Reconcile(env *core.Env) error {
 			}
 			// A hand-edited entry this build rejects keeps whatever lichen
 			// installed under its name, rather than reading as a removal.
-			if _, ok := cfg.Servers[name]; ok && !elsewhere[name] {
+			if _, ok := cfg.Servers[name]; ok {
 				continue
 			}
 			// Already gone by hand: nothing to remove.
@@ -318,9 +315,9 @@ func AddServer(name string, s Server) error {
 	return saveServers(cfg.Servers)
 }
 
-// Scope limits a server to some devices and groups. No groups is every
+// Only limits a server to some devices and groups. No groups is every
 // device.
-func Scope(name string, only []string) error {
+func Only(name string, only []string) error {
 	cfg, _, err := loadConfig()
 	if err != nil {
 		return err

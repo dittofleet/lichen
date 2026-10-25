@@ -647,9 +647,9 @@ func run(env *core.Env, force bool) error {
 	// Fold config entries into one selection per repo (a hand-edited
 	// config may list a repo twice).
 	type selection struct {
-		url          string
-		all          bool
-		only, except map[string]bool
+		url            string
+		all            bool
+		skills, except map[string]bool
 	}
 	selections := map[string]*selection{}
 	var order []string
@@ -669,7 +669,7 @@ func run(env *core.Env, force bool) error {
 		}
 		sel := selections[key]
 		if sel == nil {
-			sel = &selection{url: url, only: map[string]bool{}, except: map[string]bool{}}
+			sel = &selection{url: url, skills: map[string]bool{}, except: map[string]bool{}}
 			selections[key] = sel
 			order = append(order, key)
 		}
@@ -677,7 +677,7 @@ func run(env *core.Env, force bool) error {
 			sel.all = true
 		}
 		for _, n := range src.Skills {
-			sel.only[sanitizeName(n)] = true
+			sel.skills[sanitizeName(n)] = true
 		}
 		for _, n := range src.Except {
 			sel.except[sanitizeName(n)] = true
@@ -696,7 +696,7 @@ func run(env *core.Env, force bool) error {
 		}
 		found := discover(dir, repoName(key))
 		if !sel.all {
-			for name := range sel.only {
+			for name := range sel.skills {
 				if _, ok := found[name]; !ok {
 					lg.Printf("skills: %s has no skill %q", key, name)
 				}
@@ -707,7 +707,7 @@ func run(env *core.Env, force bool) error {
 				if sel.except[name] {
 					continue
 				}
-			} else if !sel.only[name] {
+			} else if !sel.skills[name] {
 				continue
 			}
 			// A duplicate can only come from an earlier repo: names are
@@ -826,23 +826,24 @@ func run(env *core.Env, force bool) error {
 }
 
 // AddSource records a repo (optionally narrowed to some skills) as a
-// skill source and saves the skills config. Install happens on the next
-// reconcile, which the CLI runs immediately after. A nil only leaves an
-// existing source's devices as they were.
-func AddSource(spec string, names, only []string) (string, error) {
+// skill source, saves the skills config, and returns the source as saved,
+// under its canonical key. Install happens on the next reconcile, which
+// the CLI runs immediately after. A nil only leaves an existing source's
+// devices as they were.
+func AddSource(spec string, names, only []string) (Source, error) {
 	key, _, err := parseSpec(spec)
 	if err != nil {
-		return "", err
+		return Source{}, err
 	}
 	sources, err := loadSources()
 	if err != nil {
-		return "", err
+		return Source{}, err
 	}
 	for i, raw := range names {
 		if names[i] = sanitizeName(raw); names[i] == "" {
 			// Dropping it silently would leave an empty pin, which
 			// serializes away and reads back as "every skill".
-			return "", fmt.Errorf("invalid skill name %q", raw)
+			return Source{}, fmt.Errorf("invalid skill name %q", raw)
 		}
 	}
 	slices.Sort(names)
@@ -868,15 +869,17 @@ func AddSource(spec string, names, only []string) (string, error) {
 		if only != nil {
 			sources[i].Only = only
 		}
-		return key, saveSources(sources)
+		saved := sources[i]
+		saved.Repo = key
+		return saved, saveSources(sources)
 	}
 	sources = append(sources, Source{Repo: key, Skills: names, Only: only})
-	return key, saveSources(sources)
+	return sources[len(sources)-1], saveSources(sources)
 }
 
-// Scope limits a repo's skills to some devices and groups. No groups is
+// Only limits a repo's skills to some devices and groups. No groups is
 // every device.
-func Scope(spec string, only []string) error {
+func Only(spec string, only []string) error {
 	key, _, err := parseSpec(spec)
 	if err != nil {
 		return err

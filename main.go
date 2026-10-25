@@ -180,6 +180,26 @@ func change(subject string, edit func(env *core.Env) error) error {
 	})
 }
 
+// cmdOnly scopes something to devices and groups, through change.
+func cmdOnly(what string, groups []string, scope func(env *core.Env) error) error {
+	for _, g := range groups {
+		if err := core.ValidGroup(g); err != nil {
+			return err
+		}
+	}
+	msg := fmt.Sprintf("%s goes to %s", what, core.Describe(groups))
+	if err := change(msg, scope); err != nil {
+		return err
+	}
+	fmt.Println(msg)
+	return nil
+}
+
+// notHere shows a listed thing that is for other devices.
+func notHere(line string, only []string) string {
+	return dim(fmt.Sprintf("%s  (%s, not this device)", line, core.Describe(only)))
+}
+
 // updateAndRerun installs the release the sync folder requires, restarts
 // the daemon on it, and execs the original command on the new binary.
 // The env guard is keyed to the requirement that triggered the update: a

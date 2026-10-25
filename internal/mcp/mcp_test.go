@@ -144,19 +144,19 @@ func TestReconcile(t *testing.T) {
 
 	// A server for other devices is removed here, and comes back when
 	// this device is in again. A scope change alone reinstalls nothing.
-	if err := Scope("pw", []string{"linux"}); err != nil {
+	if err := Only("pw", []string{"linux"}); err != nil {
 		t.Fatal(err)
 	}
 	reconcile()
 	expect(claude, "remove pw")
 	expect(codex, "remove pw")
-	if err := Scope("pw", []string{"mac"}); err != nil {
+	if err := Only("pw", []string{"mac"}); err != nil {
 		t.Fatal(err)
 	}
 	reconcile()
 	expect(claude, "add pw")
 	expect(codex, "add pw")
-	if err := Scope("pw", []string{"lychee"}); err != nil {
+	if err := Only("pw", []string{"lychee"}); err != nil {
 		t.Fatal(err)
 	}
 	reconcile()

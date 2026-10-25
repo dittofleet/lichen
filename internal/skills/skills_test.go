@@ -312,7 +312,7 @@ func TestRun(t *testing.T) {
 
 	// A repo for other devices is uninstalled here, clone and all, and
 	// comes back when this device is in again.
-	if err := Scope("me/skills", []string{"linux"}); err != nil {
+	if err := Only("me/skills", []string{"linux"}); err != nil {
 		t.Fatal(err)
 	}
 	pass()
@@ -320,7 +320,7 @@ func TestRun(t *testing.T) {
 	expect(filepath.Join(claude, "both"), false)
 	expect(filepath.Join(clones, cloneDirName("github.com/me/skills")), false)
 	git(home, "clone", "-q", upstream, filepath.Join(clones, cloneDirName("github.com/me/skills")))
-	if err := Scope("me/skills", []string{"linux", "lychee"}); err != nil {
+	if err := Only("me/skills", []string{"linux", "lychee"}); err != nil {
 		t.Fatal(err)
 	}
 	pass()
