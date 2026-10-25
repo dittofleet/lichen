@@ -435,6 +435,7 @@ func sourcesOf(q question) []string {
 // Entry is one source, for listing.
 type Entry struct {
 	Name    string
+	Path    string // in the sync folder, absolute
 	Dir     bool
 	Private bool
 	Outputs []Output
@@ -448,16 +449,18 @@ func List(env *core.Env) ([]Entry, error) {
 	}
 	var entries []Entry
 	for _, n := range slices.Sorted(maps.Keys(c.Sources)) {
-		fi, err := os.Stat(sourcePath(env, n))
-		entries = append(entries, Entry{Name: n, Dir: err == nil && fi.IsDir(), Private: c.Sources[n].Private, Outputs: c.Sources[n].To})
+		p := sourcePath(env, n)
+		fi, err := os.Stat(p)
+		entries = append(entries, Entry{Name: n, Path: p, Dir: err == nil && fi.IsDir(), Private: c.Sources[n].Private, Outputs: c.Sources[n].To})
 	}
 	return entries, nil
 }
 
-// Hold is an output holding an edit made on this device that waits on
-// `lichen resolve`, and why.
+// Hold is an output file holding an edit made on this device that waits
+// on `lichen resolve`, and why.
 type Hold struct {
 	Path string // ~/-relative
+	Root string // its output, ~/-relative: Path, or its synced directory
 	Why  string
 }
 
@@ -470,7 +473,7 @@ func Holds() []Hold {
 	var out []Hold
 	for _, p := range slices.Sorted(maps.Keys(st.Outputs)) {
 		if r := st.Outputs[p]; r.Held != "" {
-			out = append(out, Hold{Path: config.ContractHome(p), Why: r.Held})
+			out = append(out, Hold{Path: config.ContractHome(p), Root: config.ContractHome(r.Root), Why: r.Held})
 		}
 	}
 	return out
@@ -488,7 +491,7 @@ func Broken(env *core.Env) []Hold {
 	var out []Hold
 	for _, p := range slices.Sorted(maps.Keys(ws)) {
 		if _, err := build(env, ws[p].file); err != nil {
-			out = append(out, Hold{Path: config.ContractHome(p), Why: err.Error()})
+			out = append(out, Hold{Path: config.ContractHome(p), Root: config.ContractHome(ws[p].root), Why: err.Error()})
 		}
 	}
 	return out

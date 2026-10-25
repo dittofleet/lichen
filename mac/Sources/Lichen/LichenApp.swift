@@ -3,22 +3,25 @@ import SwiftUI
 
 @main
 struct LichenApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var store = Store()
 
     var body: some Scene {
-        WindowGroup("lichen") {
+        // One window, and closing it quits.
+        Window("lichen", id: "main") {
             ContentView()
                 .environmentObject(store)
                 .frame(minWidth: 720, minHeight: 420)
                 .task { await store.reload() }
                 // What another device synced shows up when you come back.
+                // Not at launch, which .task covers, nor during a change,
+                // which reloads when it is done.
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-                    Task { await store.reload() }
+                    if store.loaded && !store.busy {
+                        Task { await store.reload() }
+                    }
                 }
         }
         .commands {
-            CommandGroup(replacing: .newItem) {}
             CommandMenu("Files") {
                 Button("Add Files…") { addFiles(store) }
                     .keyboardShortcut("o")
@@ -29,10 +32,6 @@ struct LichenApp: App {
             }
         }
     }
-}
-
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool { true }
 }
 
 /// Asks for files or directories under the home directory, and syncs them.

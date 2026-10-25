@@ -163,17 +163,17 @@ func cmdFilesList(args []string) error {
 
 type sourceJSON struct {
 	Name    string       `json:"name"`
-	Path    string       `json:"path"` // in the sync folder, absolute
-	Dir     bool         `json:"dir,omitempty"`
-	Private bool         `json:"private,omitempty"`
+	Path    string       `json:"path"` // in the sync folder
+	Dir     bool         `json:"dir"`
+	Private bool         `json:"private"`
 	Outputs []outputJSON `json:"outputs"`
 }
 
 type outputJSON struct {
 	Path   string      `json:"path"`
-	Only   []string    `json:"only,omitempty"`
+	Only   []string    `json:"only"`
 	Here   bool        `json:"here"`
-	Issues []issueJSON `json:"issues,omitempty"`
+	Issues []issueJSON `json:"issues"`
 }
 
 // issueJSON is a file at an output that needs the user.
@@ -188,24 +188,23 @@ type issueJSON struct {
 // filesJSON is lichen files --json: every source, where it goes, and
 // what about it needs attention on this device.
 func filesJSON(env *core.Env, entries []files.Entry) []sourceJSON {
-	var issues []issueJSON
+	issues := map[string][]issueJSON{} // by output
 	for _, h := range files.Holds() {
-		issues = append(issues, issueJSON{h.Path, h.Why, "held"})
+		issues[h.Root] = append(issues[h.Root], issueJSON{h.Path, h.Why, "held"})
 	}
 	for _, b := range files.Broken(env) {
-		issues = append(issues, issueJSON{b.Path, b.Why, "broken"})
+		issues[b.Root] = append(issues[b.Root], issueJSON{b.Path, b.Why, "broken"})
 	}
 	out := []sourceJSON{}
 	for _, e := range entries {
-		s := sourceJSON{Name: e.Name, Path: env.Path(files.SourcesDir, e.Name), Dir: e.Dir, Private: e.Private, Outputs: []outputJSON{}}
+		s := sourceJSON{Name: e.Name, Path: config.ContractHome(e.Path), Dir: e.Dir, Private: e.Private, Outputs: []outputJSON{}}
 		for _, o := range e.Outputs {
-			oj := outputJSON{Path: o.Path, Only: o.Only, Here: env.Device.In(o.Only)}
-			for _, i := range issues {
-				if i.Path == o.Path || strings.HasPrefix(i.Path, o.Path+"/") {
-					oj.Issues = append(oj.Issues, i)
-				}
-			}
-			s.Outputs = append(s.Outputs, oj)
+			s.Outputs = append(s.Outputs, outputJSON{
+				Path:   o.Path,
+				Only:   append([]string{}, o.Only...),
+				Here:   env.Device.In(o.Only),
+				Issues: append([]issueJSON{}, issues[o.Path]...),
+			})
 		}
 		out = append(out, s)
 	}

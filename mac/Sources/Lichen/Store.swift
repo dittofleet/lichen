@@ -66,7 +66,8 @@ final class Store: ObservableObject {
     }
 
     func open(_ source: Source) {
-        let url = URL(fileURLWithPath: source.path)
+        guard let cli else { return }
+        let url = URL(fileURLWithPath: cli.expand(source.path))
         if source.dir {
             NSWorkspace.shared.activateFileViewerSelecting([url])
         } else {

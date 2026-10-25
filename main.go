@@ -15,6 +15,7 @@ import (
 
 	kitupdate "github.com/dittofleet/go-cli-kit/selfupdate"
 	"github.com/dittofleet/go-cli-kit/updatecheck"
+	"golang.org/x/term"
 
 	"lichen/internal/app"
 	"lichen/internal/config"
@@ -154,7 +155,9 @@ func clilog() *log.Logger { return log.New(os.Stdout, "", 0) }
 // command and a daemon pass never race on the sync folder.
 func withLock(fn func() error) error {
 	release, err := proclock.Acquire(context.Background(), func() {
-		fmt.Fprintln(os.Stderr, "waiting for the lichen daemon to finish its current sync...")
+		if term.IsTerminal(int(os.Stderr.Fd())) {
+			fmt.Fprintln(os.Stderr, "waiting for the lichen daemon to finish its current sync...")
+		}
 	})
 	if err != nil {
 		return err

@@ -103,7 +103,7 @@ struct SourceDetail: View {
             Section {
                 LabeledContent("In the sync folder") {
                     HStack {
-                        Text(store.cli?.tilde(source.path) ?? source.path)
+                        Text(source.path)
                             .font(.body.monospaced())
                             .textSelection(.enabled)
                         Button(source.dir ? "Show" : "Open") { store.open(source) }
@@ -135,29 +135,23 @@ struct SourceDetail: View {
 
     /// Asks where else the source should go.
     private func choosePlace() {
-        let home = store.cli.map { URL(fileURLWithPath: $0.home) }
-        let url: URL?
+        let panel: NSSavePanel
         if source.dir {
-            let panel = NSOpenPanel()
-            panel.canChooseFiles = false
-            panel.canChooseDirectories = true
-            panel.canCreateDirectories = true
-            panel.showsHiddenFiles = true
-            panel.directoryURL = home
-            panel.prompt = "Sync Here"
-            panel.message = "Choose a folder for \(source.name) to go to as well. It may only hold files \(source.name) has."
-            url = panel.runModal() == .OK ? panel.url : nil
+            let open = NSOpenPanel()
+            open.canChooseFiles = false
+            open.canChooseDirectories = true
+            open.message = "Choose a folder for \(source.name) to go to as well. It may only hold files \(source.name) has."
+            panel = open
         } else {
-            let panel = NSSavePanel()
+            panel = NSSavePanel()
             panel.nameFieldStringValue = (source.name as NSString).lastPathComponent
-            panel.canCreateDirectories = true
-            panel.showsHiddenFiles = true
-            panel.directoryURL = home
-            panel.prompt = "Sync Here"
             panel.message = "Choose where \(source.name) goes as well. A file already there is replaced by it."
-            url = panel.runModal() == .OK ? panel.url : nil
         }
-        if let url {
+        panel.canCreateDirectories = true
+        panel.showsHiddenFiles = true
+        panel.directoryURL = store.cli.map { URL(fileURLWithPath: $0.home) }
+        panel.prompt = "Sync Here"
+        if panel.runModal() == .OK, let url = panel.url {
             Task { await store.addOutput(url, to: source) }
         }
     }
@@ -195,7 +189,7 @@ struct OutputRow: View {
                 .fixedSize()
             }
             ForEach(output.issues, id: \.self) { issue in
-                IssueLabel(issue: issue, at: output.path)
+                IssueLabel(issue: issue)
             }
         }
         .confirmationDialog("Stop writing \(source.name) to \(output.path)?", isPresented: $removing) {
@@ -212,11 +206,18 @@ struct OutputRow: View {
 
 struct IssueLabel: View {
     let issue: Issue
-    let at: String
 
     var body: some View {
+        let hint: LocalizedStringKey = switch issue.kind {
+        case .held: "Settle it with `lichen resolve`."
+        case .broken: "Not synced until its sources compile."
+        }
         Label {
-            Text(.init(issue.message(at: at))).font(.callout)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: "\(issue.path): \(issue.why)")
+                Text(hint).foregroundStyle(.secondary)
+            }
+            .font(.callout)
         } icon: {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
         }
@@ -254,9 +255,10 @@ struct ScopeEditor: View {
         _chosen = State(initialValue: Set(only))
     }
 
-    private var choices: [String] {
-        let known = store.devices.scopeChoices
-        return known + only.filter { !known.contains($0) }
+    /// Names in the scope that lichen doesn't know (a device not set up
+    /// yet, say), kept with the devices.
+    private var unknown: [String] {
+        only.filter { !store.devices.scopeChoices.contains($0) }
     }
 
     var body: some View {
@@ -265,9 +267,9 @@ struct ScopeEditor: View {
                 .toggleStyle(.switch)
             if !everywhere {
                 Divider()
-                group("Systems", ["mac", "linux"])
+                group("Systems", Devices.systems)
                 group("Groups", store.devices.groups.keys.sorted())
-                group("Devices", choices.filter { !["mac", "linux"].contains($0) && store.devices.groups[$0] == nil })
+                group("Devices", store.devices.devices.map(\.name).sorted() + unknown)
             }
             HStack {
                 Spacer()
@@ -312,7 +314,7 @@ struct ScopeEditor: View {
     }
 
     private func apply() {
-        let new = everywhere ? [] : choices.filter(chosen.contains)
+        let new = everywhere ? [] : (store.devices.scopeChoices + unknown).filter(chosen.contains)
         if new != only {
             Task { await store.scope(target, to: new) }
         }

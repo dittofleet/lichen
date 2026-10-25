@@ -164,13 +164,6 @@ func cmdStatus() error {
 	return nil
 }
 
-type deviceJSON struct {
-	Name   string   `json:"name"`
-	Online bool     `json:"online"`
-	Self   bool     `json:"self,omitempty"`
-	Groups []string `json:"groups"` // its custom groups
-}
-
 func cmdDevices(args []string) error {
 	asJSON, err := jsonFlag(args)
 	if err != nil {
@@ -184,34 +177,26 @@ func cmdDevices(args []string) error {
 	if err != nil {
 		devices = []events.Device{{Name: env.Device.Name, Online: true, Self: true}}
 		if !asJSON {
-			fmt.Println(dim("(crosstalk is not running: only this device is known)"))
+			fmt.Println(dim("(crosstalk is not running: only this device and the ones in your groups are known)"))
+		}
+	}
+	// Devices named in groups count too, known to crosstalk or not.
+	for _, g := range slices.Sorted(maps.Keys(env.Settings.Groups)) {
+		for _, name := range env.Settings.Groups[g] {
+			if !slices.ContainsFunc(devices, func(d events.Device) bool { return d.Name == name }) {
+				devices = append(devices, events.Device{Name: name})
+			}
 		}
 	}
 	if asJSON {
-		// Devices named in groups count too, known to crosstalk or not.
-		known := map[string]bool{}
-		out := struct {
-			Devices []deviceJSON        `json:"devices"`
+		groups := env.Settings.Groups
+		if groups == nil {
+			groups = map[string][]string{}
+		}
+		return printJSON(struct {
+			Devices []events.Device     `json:"devices"`
 			Groups  map[string][]string `json:"groups"`
-		}{Devices: []deviceJSON{}, Groups: env.Settings.Groups}
-		add := func(d events.Device) {
-			if !known[d.Name] {
-				known[d.Name] = true
-				out.Devices = append(out.Devices, deviceJSON{Name: d.Name, Online: d.Online, Self: d.Self, Groups: append([]string{}, env.Settings.GroupsOf(d.Name)...)})
-			}
-		}
-		for _, d := range devices {
-			add(d)
-		}
-		for _, g := range slices.Sorted(maps.Keys(env.Settings.Groups)) {
-			for _, d := range env.Settings.Groups[g] {
-				add(events.Device{Name: d})
-			}
-		}
-		if out.Groups == nil {
-			out.Groups = map[string][]string{}
-		}
-		return printJSON(out)
+		}{devices, groups})
 	}
 	width := 0
 	for _, d := range devices {

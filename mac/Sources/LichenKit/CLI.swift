@@ -12,7 +12,9 @@ public struct CLI {
     }
 
     /// Finds lichen where it gets installed. LICHEN_BIN points at another.
-    public static func find(environment: [String: String] = ProcessInfo.processInfo.environment) -> CLI? {
+    public static func find() -> CLI? {
+        let environment = ProcessInfo.processInfo.environment
+        // lichen goes by HOME, which Foundation's home directory doesn't.
         let home = environment["HOME"] ?? NSHomeDirectory()
         var candidates = ["\(home)/.local/bin/lichen", "/opt/homebrew/bin/lichen", "/usr/local/bin/lichen"]
         if let bin = environment["LICHEN_BIN"] {
@@ -28,7 +30,12 @@ public struct CLI {
     /// said went wrong.
     public func run(_ args: [String]) async throws -> Data {
         let binary = binary
-        return try await Task.detached { try Self.run(binary, args) }.value
+        // Waiting on it blocks a thread, so not one of the few async ones.
+        return try await withCheckedThrowingContinuation { done in
+            DispatchQueue.global().async {
+                done.resume(with: Result { try Self.run(binary, args) })
+            }
+        }
     }
 
     private static func run(_ binary: URL, _ args: [String]) throws -> Data {
@@ -71,11 +78,9 @@ public struct CLI {
     /// What a failed run said, without lichen's own name in front.
     static func message(_ stderr: Data, _ stdout: Data) -> String {
         let text = String(decoding: stderr.isEmpty ? stdout : stderr, as: UTF8.self)
-        let lines = text.split(separator: "\n").map { line -> String in
+        let said = text.split(separator: "\n").map { line in
             line.hasPrefix("lichen: ") ? String(line.dropFirst("lichen: ".count)) : String(line)
-        }
-        // The lock wait notice isn't the error.
-        let said = lines.filter { !$0.hasPrefix("waiting for the lichen daemon") }.joined(separator: "\n")
+        }.joined(separator: "\n")
         return said.isEmpty ? "lichen failed" : said
     }
 
@@ -93,11 +98,6 @@ public struct CLI {
         } catch {
             throw Failure(message: "lichen answered in a way this app doesn't understand. Update both to the latest (lichen update).")
         }
-    }
-
-    /// An absolute path as lichen shows it, ~/-relative.
-    public func tilde(_ path: String) -> String {
-        path == home ? "~" : path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
     }
 
     /// A ~/-relative path, absolute.
