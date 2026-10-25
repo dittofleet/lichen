@@ -42,7 +42,13 @@ type Module struct{}
 func (Module) Name() string   { return "skills" }
 func (Module) Config() string { return ConfigFile }
 
-func (Module) Reconcile(env *core.Env) error { return Reconcile(env.Log) }
+// Reconcile makes the installed skills match the skills config: clone or
+// poll each repo meant for this device (polls are throttled), install or
+// refresh every selected skill, and remove manifest-owned skills the
+// config no longer wants here. Per-repo failures are logged and skipped
+// so one dead repo never blocks the rest, and a repo that failed keeps
+// its installed skills.
+func (Module) Reconcile(env *core.Env) error { return run(env, false) }
 
 // pollEvery throttles upstream checks. Reconciles run much more often
 // than skill repos change (startup, every sync-repo event), and each
@@ -58,16 +64,19 @@ func claudeSkillsDir() (string, error) {
 	return config.HomeJoin(".claude", "skills")
 }
 
-// Source selects agent skills to sync from one public git repo. An
-// empty Only means every skill the repo publishes, minus Except.
-// Except records removals from an every-skill source as INTENT: pinning
-// the remaining skills instead would bake one machine's install state
-// (name collisions, foreign dirs it skipped) into the shared config and
+// Source selects agent skills to sync from one public git repo. Empty
+// Skills means every skill the repo publishes, minus Except. Except
+// records removals from an every-skill source as INTENT: pinning the
+// remaining skills instead would bake one machine's install state (name
+// collisions, foreign dirs it skipped) into the shared config and
 // uninstall skills other machines legitimately have.
 type Source struct {
 	Repo   string   `json:"repo"`
-	Only   []string `json:"only,omitempty"`
+	Skills []string `json:"skills,omitempty"`
 	Except []string `json:"except,omitempty"`
+	// Only limits the repo's skills to these devices and groups. Empty
+	// is every device.
+	Only []string `json:"only,omitempty"`
 }
 
 // skillsConfig is the synced skills config file. Harnesses lists the
@@ -601,23 +610,14 @@ type target struct {
 	onlyFor []string // lichen-harnesses, empty for all
 }
 
-// Reconcile makes the installed skills match the skills config: clone or
-// poll each configured repo (polls are throttled), install or refresh
-// every selected skill, and remove manifest-owned skills the config no
-// longer wants. Per-repo failures are logged and skipped so one dead
-// repo never blocks the rest, and a repo that failed keeps its installed
-// skills.
-func Reconcile(lg *log.Logger) error {
-	return run(lg, false)
-}
-
 // Update is Reconcile without the poll throttle: every repo is checked
 // against upstream now.
-func Update(lg *log.Logger) error {
-	return run(lg, true)
+func Update(env *core.Env) error {
+	return run(env, true)
 }
 
-func run(lg *log.Logger, force bool) error {
+func run(env *core.Env, force bool) error {
+	lg := env.Log
 	scfg, exists, err := loadConfig()
 	if err != nil {
 		return err
@@ -664,16 +664,19 @@ func run(lg *log.Logger, force bool) error {
 			lg.Printf("skills: %v", err)
 			continue
 		}
+		if !env.Device.In(src.Only) {
+			continue
+		}
 		sel := selections[key]
 		if sel == nil {
 			sel = &selection{url: url, only: map[string]bool{}, except: map[string]bool{}}
 			selections[key] = sel
 			order = append(order, key)
 		}
-		if len(src.Only) == 0 {
+		if len(src.Skills) == 0 {
 			sel.all = true
 		}
-		for _, n := range src.Only {
+		for _, n := range src.Skills {
 			sel.only[sanitizeName(n)] = true
 		}
 		for _, n := range src.Except {
@@ -822,10 +825,11 @@ func run(lg *log.Logger, force bool) error {
 	return man.save()
 }
 
-// AddSource records a repo (optionally narrowed to specific skills) as a
+// AddSource records a repo (optionally narrowed to some skills) as a
 // skill source and saves the skills config. Install happens on the next
-// reconcile, which the CLI runs immediately after.
-func AddSource(spec string, only []string) (string, error) {
+// reconcile, which the CLI runs immediately after. A nil only leaves an
+// existing source's devices as they were.
+func AddSource(spec string, names, only []string) (string, error) {
 	key, _, err := parseSpec(spec)
 	if err != nil {
 		return "", err
@@ -834,37 +838,63 @@ func AddSource(spec string, only []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for i, raw := range only {
-		if only[i] = sanitizeName(raw); only[i] == "" {
+	for i, raw := range names {
+		if names[i] = sanitizeName(raw); names[i] == "" {
 			// Dropping it silently would leave an empty pin, which
 			// serializes away and reads back as "every skill".
 			return "", fmt.Errorf("invalid skill name %q", raw)
 		}
 	}
-	slices.Sort(only)
-	only = slices.Compact(only)
+	slices.Sort(names)
+	names = slices.Compact(names)
 	for i, src := range sources {
 		k, _, err := parseSpec(src.Repo)
 		if err != nil || k != key {
 			continue
 		}
 		switch {
-		case len(only) == 0:
-			sources[i].Only, sources[i].Except = nil, nil // widen to every skill in the repo
-		case src.Only != nil:
-			sources[i].Only = slices.Compact(slices.Sorted(slices.Values(append(src.Only, only...))))
+		case len(names) == 0:
+			sources[i].Skills, sources[i].Except = nil, nil // widen to every skill in the repo
+		case src.Skills != nil:
+			sources[i].Skills = slices.Compact(slices.Sorted(slices.Values(append(src.Skills, names...))))
 		default:
 			// An every-skill source already covers the names: re-adding
 			// them just lifts any standing exclusion.
-			sources[i].Except = slices.DeleteFunc(src.Except, func(s string) bool { return slices.Contains(only, s) })
+			sources[i].Except = slices.DeleteFunc(src.Except, func(s string) bool { return slices.Contains(names, s) })
 			if len(sources[i].Except) == 0 {
 				sources[i].Except = nil
 			}
 		}
+		if only != nil {
+			sources[i].Only = only
+		}
 		return key, saveSources(sources)
 	}
-	sources = append(sources, Source{Repo: key, Only: only})
+	sources = append(sources, Source{Repo: key, Skills: names, Only: only})
 	return key, saveSources(sources)
+}
+
+// Scope limits a repo's skills to some devices and groups. No groups is
+// every device.
+func Scope(spec string, only []string) error {
+	key, _, err := parseSpec(spec)
+	if err != nil {
+		return err
+	}
+	sources, err := loadSources()
+	if err != nil {
+		return err
+	}
+	found := false
+	for i, src := range sources {
+		if k, _, err := parseSpec(src.Repo); err == nil && k == key {
+			sources[i].Only, found = only, true
+		}
+	}
+	if !found {
+		return fmt.Errorf("%s is not a synced skill repo (see: lichen skills list)", key)
+	}
+	return saveSources(sources)
 }
 
 // RemoveSources drops skills or whole repos from the skills config. An
@@ -899,11 +929,11 @@ func RemoveSources(args []string) error {
 			continue
 		}
 		name := sanitizeName(arg)
-		if idx := slices.IndexFunc(sources, func(s Source) bool { return slices.Contains(s.Only, name) }); idx >= 0 {
-			sources[idx].Only = slices.DeleteFunc(sources[idx].Only, func(s string) bool { return s == name })
-			// An emptied Only would serialize away and read back as
+		if idx := slices.IndexFunc(sources, func(s Source) bool { return slices.Contains(s.Skills, name) }); idx >= 0 {
+			sources[idx].Skills = slices.DeleteFunc(sources[idx].Skills, func(s string) bool { return s == name })
+			// An emptied Skills would serialize away and read back as
 			// "every skill": a source with nothing left must go entirely.
-			if len(sources[idx].Only) == 0 {
+			if len(sources[idx].Skills) == 0 {
 				sources = slices.Delete(sources, idx, idx+1)
 			}
 			continue
@@ -916,7 +946,7 @@ func RemoveSources(args []string) error {
 		}
 		idx := slices.IndexFunc(sources, func(s Source) bool {
 			k, _, err := parseSpec(s.Repo)
-			return err == nil && k == st.Repo && s.Only == nil
+			return err == nil && k == st.Repo && s.Skills == nil
 		})
 		if idx < 0 {
 			return fmt.Errorf("%q is not a synced skill (see: lichen skills list)", arg)
@@ -946,22 +976,17 @@ func Installed() ([]Skill, error) {
 	return out, nil
 }
 
-// ConfiguredKeys returns the canonical keys of the configured skill
-// repos, in config order (unparseable entries pass through as written).
-func ConfiguredKeys() []string {
+// Configured returns the configured skill repos, in config order, each
+// under its canonical key (unparseable entries pass through as written).
+func Configured() []Source {
 	sources, err := loadSources()
 	if err != nil {
 		return nil
 	}
-	var keys []string
-	for _, src := range sources {
-		key, _, err := parseSpec(src.Repo)
-		if err != nil {
-			key = src.Repo
-		}
-		if !slices.Contains(keys, key) {
-			keys = append(keys, key)
+	for i, src := range sources {
+		if key, _, err := parseSpec(src.Repo); err == nil {
+			sources[i].Repo = key
 		}
 	}
-	return keys
+	return sources
 }

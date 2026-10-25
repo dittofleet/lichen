@@ -13,7 +13,6 @@ package mcp
 
 import (
 	"fmt"
-	"log"
 	"maps"
 	"path/filepath"
 	"regexp"
@@ -36,7 +35,7 @@ type Module struct{}
 func (Module) Name() string   { return "mcp" }
 func (Module) Config() string { return ConfigFile }
 
-func (Module) Reconcile(env *core.Env) error { return Reconcile(env.Log) }
+func (Module) Reconcile(env *core.Env) error { return Reconcile(env) }
 
 // Server is one MCP server: a local one lichen launches through Command
 // and Args, or a remote one reachable at URL.
@@ -44,8 +43,13 @@ type Server struct {
 	Command string   `json:"command,omitempty"`
 	Args    []string `json:"args,omitempty"`
 	URL     string   `json:"url,omitempty"`
+	// Only limits the server to these devices and groups. Empty is every
+	// device.
+	Only []string `json:"only,omitempty"`
 }
 
+// equal reports whether two servers run the same thing, wherever they
+// are for.
 func (s Server) equal(o Server) bool {
 	return s.Command == o.Command && s.URL == o.URL && slices.Equal(s.Args, o.Args)
 }
@@ -79,7 +83,7 @@ func validate(name string, s Server) error {
 	case s.URL == "" && s.Command == "":
 		return fmt.Errorf("%s has neither a url nor a command", name)
 	case strings.HasPrefix(s.Command, "-"):
-		return fmt.Errorf("%s command %q looks like a flag (lichen mcp add takes no flags)", name, s.Command)
+		return fmt.Errorf("%s command %q looks like a flag", name, s.Command)
 	}
 	return nil
 }
@@ -177,10 +181,11 @@ var missingLogged = map[string]bool{}
 
 // Reconcile makes every available harness's lichen-installed servers
 // match the mcp config: add what's missing, replace what changed, and
-// remove what the config no longer lists. A server that fails in one
-// harness is logged and retried on the next pass, never blocking the
-// rest.
-func Reconcile(lg *log.Logger) error {
+// remove what the config no longer lists for this device. A server that
+// fails in one harness is logged and retried on the next pass, never
+// blocking the rest.
+func Reconcile(env *core.Env) error {
+	lg := env.Log
 	cfg, exists, err := loadConfig()
 	if err != nil {
 		return err
@@ -201,7 +206,12 @@ func Reconcile(lg *log.Logger) error {
 	}
 
 	desired := map[string]Server{}
+	elsewhere := map[string]bool{} // listed, but for other devices
 	for _, name := range slices.Sorted(maps.Keys(cfg.Servers)) {
+		if !env.Device.In(cfg.Servers[name].Only) {
+			elsewhere[name] = true
+			continue
+		}
 		if err := validate(name, cfg.Servers[name]); err != nil {
 			lg.Printf("mcp: %v", err)
 			continue
@@ -271,7 +281,7 @@ func Reconcile(lg *log.Logger) error {
 			}
 			// A hand-edited entry this build rejects keeps whatever lichen
 			// installed under its name, rather than reading as a removal.
-			if _, ok := cfg.Servers[name]; ok {
+			if _, ok := cfg.Servers[name]; ok && !elsewhere[name] {
 				continue
 			}
 			// Already gone by hand: nothing to remove.
@@ -304,6 +314,22 @@ func AddServer(name string, s Server) error {
 	if err != nil {
 		return err
 	}
+	cfg.Servers[name] = s
+	return saveServers(cfg.Servers)
+}
+
+// Scope limits a server to some devices and groups. No groups is every
+// device.
+func Scope(name string, only []string) error {
+	cfg, _, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	s, ok := cfg.Servers[name]
+	if !ok {
+		return fmt.Errorf("%q is not a synced MCP server (see: lichen mcp list)", name)
+	}
+	s.Only = only
 	cfg.Servers[name] = s
 	return saveServers(cfg.Servers)
 }

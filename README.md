@@ -177,6 +177,14 @@ daemon polls each repo about hourly, and a repo moving only reinstalls
 the skills whose content actually changed. `lichen skills update` checks
 immediately.
 
+A repo's skills can be limited to some devices, as files can. A device
+left out uninstalls them:
+
+```sh
+lichen skills add owner/mac-skills --only mac
+lichen skills only owner/mac-skills mac servers   # change it later
+```
+
 ## MCP servers
 
 The mcp module installs MCP servers into Claude Code and Codex, from a
@@ -198,7 +206,14 @@ instead. Running sessions pick up changes after a restart.
 
 The list of servers lives in `~/lichen/mcp.json`, so adding a server on
 one device installs it everywhere, and removing one uninstalls it
-everywhere.
+everywhere. A server can be limited to some devices, and a device left
+out uninstalls it:
+
+```sh
+lichen mcp add playwright --only mac bunx @playwright/mcp@latest
+lichen mcp only playwright mac servers   # change it later
+```
+
 Servers that need API keys, headers or a login aren't supported.
 
 ## Updates
