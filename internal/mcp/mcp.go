@@ -4,9 +4,9 @@
 // writer of its config file. A server is just a name and either a
 // command to launch or a URL to reach: no env vars, headers or auth, so
 // nothing secret ever enters the synced config. WHICH servers to install
-// lives in this module's own config file (~/.config/lichen/mcp.json),
-// which the files module carries to every machine. What this machine
-// installed where lives in a local manifest, the ownership boundary:
+// lives in this module's own config file (mcp.json in the sync folder).
+// What this machine installed where lives in a local manifest, the
+// ownership boundary:
 // lichen only ever replaces or removes servers it added itself, so
 // servers added by other means always coexist with lichen's.
 package mcp
@@ -21,7 +21,27 @@ import (
 	"strings"
 
 	"lichen/internal/config"
+	"lichen/internal/core"
 )
+
+// ConfigFile is the module's config in the sync folder.
+const ConfigFile = "mcp.json"
+
+// ConfigPath is where the module's config lives.
+func ConfigPath() (string, error) {
+	dir, err := config.SyncDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, ConfigFile), nil
+}
+
+// Module is the mcp module.
+type Module struct{}
+
+func (Module) Name() string { return "mcp" }
+
+func (Module) Reconcile(env *core.Env) error { return Reconcile(env.Log) }
 
 // Server is one MCP server: a local one lichen launches through Command
 // and Args, or a remote one reachable at URL.
@@ -78,7 +98,7 @@ type mcpConfig struct {
 // caller tell "no file yet" (a fresh machine before its first sync, or
 // a file briefly moved aside) apart from a file that lists no servers.
 func loadConfig() (cfg *mcpConfig, exists bool, err error) {
-	p, err := config.MCPPath()
+	p, err := ConfigPath()
 	if err != nil {
 		return nil, false, err
 	}
@@ -94,13 +114,12 @@ func loadConfig() (cfg *mcpConfig, exists bool, err error) {
 
 // saveServers rewrites the servers map inside mcp.json.
 func saveServers(servers map[string]Server) error {
-	p, err := config.MCPPath()
+	p, err := ConfigPath()
 	if err != nil {
 		return err
 	}
 	if len(servers) == 0 {
-		// The file stays (deleting a managed file makes the files module
-		// restore it), just with no servers.
+		// The file stays, just with no servers.
 		return config.SetJSONField(p, "servers", nil)
 	}
 	return config.SetJSONField(p, "servers", servers)
@@ -178,10 +197,9 @@ func Reconcile(lg *log.Logger) error {
 	if len(cfg.Servers) == 0 && len(man.Servers) == 0 {
 		return nil
 	}
-	// An absent mcp.json is not "zero servers": a fresh machine's first
-	// pass runs before the sync repo delivers the file, and an apply can
-	// briefly move it aside. Treating absence as emptiness would turn
-	// those windows into a mass uninstall.
+	// An absent mcp.json is not "zero servers": a sync folder that lost
+	// it (a bad merge, a hand deletion) must not turn into a mass
+	// uninstall. Removing every server keeps the file, empty.
 	if !exists && len(man.Servers) > 0 {
 		lg.Printf("mcp: no mcp.json yet, leaving installed servers alone")
 		return nil

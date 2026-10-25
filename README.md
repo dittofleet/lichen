@@ -2,13 +2,13 @@
 
 # lichen
 
-A project for easily keeping macOS dev environments in sync.
+A project for easily keeping dev environments in sync across your Macs
+and Linux machines.
 
 It syncs things, one module per kind of thing:
 
 - **files**: dotfiles, slash commands, `CLAUDE.md`, app configs, anything
-  under your home directory. Your own skills and slash commands are just
-  files and directories, so they sync like everything else.
+  under your home directory, written wherever each device needs it.
 - **skills**: agent skills installed from public repos, kept up to date
   by polling.
 - **mcp**: MCP servers, installed into Claude Code and Codex.
@@ -17,44 +17,112 @@ lichen is a pun on 'liken' and just how lichen behaves in general.
 
 ## Setup
 
-Prereqs on each machine: [Homebrew](https://brew.sh) (installs chezmoi),
-git access that can clone the sync repo (SSH key or credentials, since
-the repo should be private), and [crosstalk](https://github.com/dittofleet/crosstalk)
-joined to your hub. lichen nudges your other machines through crosstalk
-after each push, so they pull within seconds. Without it, and for pushes
-made outside lichen, machines catch up on an hourly pass.
+Prereqs on each device: git access that can clone the sync repo (SSH key
+or credentials, since the repo should be private), and
+[crosstalk](https://github.com/dittofleet/crosstalk) joined to your hub.
+lichen nudges your other devices through crosstalk after each push, so
+they pull within seconds, and names each device the way crosstalk does.
+Without it, and for pushes made outside lichen, devices catch up on an
+hourly pass.
 
 Create an empty private repo once (the sync repo, e.g. `you/lichen-sync`),
-then on every machine:
+then on every device:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/dittofleet/lichen/HEAD/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/dittofleet/.github/main/install.sh | sh -s lichen
 ```
 
-Then start syncing things:
+It asks for the sync repo's URL (or takes it from `LICHEN_REPO`), clones
+it to `~/lichen`, and starts the daemon: a launchd agent on macOS, a
+systemd user service on Linux. `lichen setup <git url>` does the same
+later, if you skip the question.
 
-```sh
-lichen sync ~/.zshrc ~/.claude/CLAUDE.md
+## The sync folder
+
+`~/lichen` holds everything lichen syncs, as plain files:
+
+```
+~/lichen/
+  lichen.json   device groups and settings
+  files.json    where each file goes
+  skills.json
+  mcp.json
+  files/        the files themselves
 ```
 
-Deletions sync too: delete a synced file on one machine and every other
-machine deletes its copy. A file deleted by mistake can be brought back
-from the sync repo's git history, on all machines at once:
+Edit anything in it and lichen commits and pushes it. You never run git
+there yourself, but its history is all there.
+
+## Files
 
 ```sh
-lichen sync recover ~/.zshrc
+lichen files add ~/.zshrc ~/.claude/CLAUDE.md
+```
+
+Each path becomes a source in `~/lichen/files` (`zshrc`,
+`claude/CLAUDE.md`: leading dots are dropped), with an output where it
+came from. Every device writes the outputs meant for it, and editing
+either side syncs: the output (`~/.zshrc`) or the source
+(`~/lichen/files/zshrc`). A directory syncs as a whole, including files
+added to it later.
+
+`lichen files` shows every source and where it goes.
+
+### Which devices, and where
+
+An output can be limited to some devices: by name, by OS (`mac`,
+`linux`), or by a group of your own.
+
+```sh
+lichen files add ~/.zshrc --only mac
+lichen groups add servers hetzner-1 hetzner-2
+lichen files only ~/.zshrc mac servers   # change it later
+lichen devices                           # names and groups
+```
+
+One source can go to several places, and each place can have its own
+devices:
+
+```sh
+lichen files add ~/.codex/AGENTS.md --to claude/CLAUDE.md
+lichen files add ~/.config/agents.md --to claude/CLAUDE.md --only linux
+```
+
+Edit any of them and the others follow. When a device joins with its own
+copy of a file that is already synced, the synced version replaces it.
+
+### Deleting and stopping
+
+Deleting a synced file deletes it on every device. A file deleted by
+mistake comes back from the sync folder's history, on all devices at
+once:
+
+```sh
+lichen files recover ~/.zshrc
+```
+
+`lichen files remove ~/.zshrc` stops syncing instead: every device keeps
+its copy as a plain file. So does moving an output elsewhere, or taking a
+device out of its scope.
+
+### Edits on two devices at once
+
+They merge, as long as they touch different lines. Edits to the same
+lines are a conflict: lichen leaves the file as it is on that device and
+says so in `lichen status` and the log, until you pick one:
+
+```sh
+lichen files resolve ~/.zshrc --keep here     # or --keep synced
 ```
 
 ### Backups
 
-Off by default. When a machine already has its own version of a file
-that starts syncing (a fresh machine joining, or a path first synced
-from another machine), the synced version replaces it and the local one
-is gone. A directory in the way is the exception: it may hold files
-that were never synced, so it is always moved to `~/lichen-backups/`.
-To keep replaced and deleted files there as well, set `backups` in
-`~/.config/lichen/config.json` (it syncs, so this turns backups on for
-every machine):
+Off by default. When a synced version replaces a device's own copy, or a
+file deleted elsewhere is deleted here, the old one is gone. A directory
+in the way is the exception: it may hold files that were never synced, so
+it is always moved to `~/lichen-backups/`. To keep replaced and deleted
+files there as well, set `backups` in `~/lichen/lichen.json` (it syncs, so
+this turns backups on for every device):
 
 ```json
 { "backups": true }
@@ -100,9 +168,9 @@ limited skill's canonical copy lives in `~/.local/share/lichen/skills`
 instead, reachable only through the listed harnesses' links. List
 `agents` to keep it in `~/.agents/skills`.
 
-The list of skill repos lives in its own synced config file
-(`~/.config/lichen/skills.json`), so adding a skill on one machine
-installs it everywhere, and removing one uninstalls it everywhere. The
+The list of skill repos lives in `~/lichen/skills.json`, so adding a skill
+on one device installs it everywhere, and removing one uninstalls it
+everywhere. The
 daemon polls each repo about hourly, and a repo moving only reinstalls
 the skills whose content actually changed. `lichen skills update` checks
 immediately.
@@ -126,9 +194,9 @@ already use in a harness is left alone there. A lichen server deleted by
 hand comes back on the next pass, so remove it with `lichen mcp remove`
 instead. Running sessions pick up changes after a restart.
 
-The list of servers lives in its own synced config file
-(`~/.config/lichen/mcp.json`), so adding a server on one machine
-installs it everywhere, and removing one uninstalls it everywhere.
+The list of servers lives in `~/lichen/mcp.json`, so adding a server on
+one device installs it everywhere, and removing one uninstalls it
+everywhere.
 Servers that need API keys, headers or a login aren't supported.
 
 ## Updates
@@ -138,6 +206,11 @@ newer release if one is out and restarts the daemon. It skips the check
 when `CI` or `LICHEN_NO_UPDATE_CHECK` is set or stderr is not a terminal.
 `lichen update` does the same right away.
 
-The sync repo also records the newest lichen version that has synced with
-it, and a machine running an older build pauses syncing and updates itself
-straight away, so updating one machine brings the whole fleet along.
+The sync folder also records the newest lichen version that has synced
+with it, and a device running an older build pauses syncing and updates
+itself straight away, so updating one device brings the whole fleet along.
+
+## Uninstalling
+
+`lichen uninstall` stops the daemon and removes lichen from the device.
+The sync folder and every synced file stay, the files as plain files.

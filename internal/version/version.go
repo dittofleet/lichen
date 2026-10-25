@@ -1,7 +1,7 @@
 // Package version carries the build's stamped release version and orders
-// release tags, backing lichen's version gate: the sync repo records the
+// release tags, backing lichen's version gate: the sync folder records the
 // newest version that has synced with it, and older builds refuse to
-// touch the repo until they update.
+// touch it until they update.
 package version
 
 import (
@@ -14,11 +14,6 @@ import (
 // -ldflags "-X lichen/internal/version.Current=<tag>". Source builds
 // stay "dev".
 var Current = "dev"
-
-// Marker is the file at the sync repo's root recording the newest lichen
-// version that has synced with the repo. Dot-prefixed names are ignored
-// by chezmoi, so it is never applied into the home directory.
-const Marker = ".lichen-version"
 
 // IsRelease reports whether this binary carries a stamped release tag.
 // Dev builds do not, and sit outside version gating entirely.

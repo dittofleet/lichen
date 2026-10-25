@@ -1,5 +1,5 @@
-// Package selfupdate installs the lichen release the sync repo requires:
-// the version gate drives it when the sync repo outversions this build.
+// Package selfupdate installs the lichen release the sync folder requires:
+// the version gate drives it when the sync folder outversions this build.
 package selfupdate
 
 import (
@@ -33,7 +33,7 @@ func Required(repoV string) (string, error) {
 		return "", fmt.Errorf("latest release tag %q is not vX.Y.Z", tag)
 	}
 	if version.Compare(tag, repoV) < 0 {
-		return "", fmt.Errorf("the sync repo requires %s but the latest release is %s: publish a newer release, or lower %s in the sync repo", repoV, tag, version.Marker)
+		return "", fmt.Errorf("the sync repo requires %s but the latest release is %s: publish a newer release, or lower .lichen/version in the sync folder", repoV, tag)
 	}
 	if err := kitupdate.Install(ctx, lichen, tag); err != nil {
 		return "", err

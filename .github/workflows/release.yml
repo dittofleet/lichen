@@ -21,14 +21,18 @@ jobs:
         with:
           go-version: 'stable'
 
-      - name: Build darwin targets
+      - name: Test
+        run: go test ./...
+
+      - name: Build all targets
         run: |
           mkdir -p dist
-          for combo in darwin-arm64 darwin-x64; do
+          for combo in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
+            os=${combo%-*}
             arch=${combo#*-}
             goarch=$arch
             [ "$arch" = "x64" ] && goarch=amd64
-            CGO_ENABLED=0 GOOS=darwin GOARCH=$goarch \
+            CGO_ENABLED=0 GOOS=$os GOARCH=$goarch \
               go build -trimpath \
                 -ldflags="-s -w -X lichen/internal/version.Current=${{ github.ref_name }}" \
                 -o dist/lichen-${combo} .
@@ -61,7 +65,7 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
-          for bin in dist/lichen-*; do
+          for bin in dist/lichen-darwin-*; do
             codesign --force --sign "$APPLE_SIGNING_IDENTITY" \
               --identifier dev.lichen --options runtime --timestamp "$bin"
             codesign --verify --strict --verbose=2 "$bin"
@@ -81,7 +85,7 @@ jobs:
             echo "Missing notarization secrets. Set APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, and APPLE_TEAM_ID."
             exit 1
           fi
-          for bin in dist/lichen-*; do
+          for bin in dist/lichen-darwin-*; do
             ditto -c -k "$bin" "$bin.zip"
             xcrun notarytool submit "$bin.zip" \
               --apple-id "$APPLE_ID" \
