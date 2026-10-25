@@ -17,7 +17,7 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             List(shown, selection: $selection) { source in
-                SourceRow(source: source).tag(source.id)
+                SourceRow(source: source)
             }
             .searchable(text: $search, placement: .sidebar, prompt: "Filter")
             .navigationSplitViewColumnWidth(min: 220, ideal: 260)
@@ -48,17 +48,19 @@ struct ContentView: View {
                 if store.busy {
                     ProgressView().controlSize(.small)
                 }
-                Button { Task { await store.sync() } } label: {
-                    Label("Sync Now", systemImage: "arrow.triangle.2.circlepath")
+                Group {
+                    Button { Task { await store.sync() } } label: {
+                        Label("Sync Now", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .help("Sync Now")
+                    Button { addFiles(store) } label: {
+                        Label("Add Files", systemImage: "plus")
+                    }
+                    .help("Add Files…")
                 }
-                .help("Sync Now")
-                Button { addFiles(store) } label: {
-                    Label("Add Files", systemImage: "plus")
-                }
-                .help("Add Files…")
+                .disabled(store.cli == nil)
             }
         }
-        .disabled(store.cli == nil)
         .alert("lichen couldn't do that", isPresented: Binding(get: { store.failure != nil }, set: { if !$0 { store.failure = nil } })) {
             Button("OK") {}
         } message: {
@@ -315,7 +317,7 @@ struct ScopeEditor: View {
 
     private func apply() {
         let new = everywhere ? [] : (store.devices.scopeChoices + unknown).filter(chosen.contains)
-        if new != only {
+        if Set(new) != Set(only) {
             Task { await store.scope(target, to: new) }
         }
         done()

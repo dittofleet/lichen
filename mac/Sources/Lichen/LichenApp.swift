@@ -23,12 +23,15 @@ struct LichenApp: App {
         }
         .commands {
             CommandMenu("Files") {
-                Button("Add Files…") { addFiles(store) }
-                    .keyboardShortcut("o")
-                Button("Sync Now") { Task { await store.sync() } }
-                    .keyboardShortcut("s", modifiers: [.command, .shift])
-                Button("Reload") { Task { await store.reload() } }
-                    .keyboardShortcut("r")
+                Group {
+                    Button("Add Files…") { addFiles(store) }
+                        .keyboardShortcut("o")
+                    Button("Sync Now") { Task { await store.sync() } }
+                        .keyboardShortcut("s", modifiers: [.command, .shift])
+                    Button("Reload") { Task { await store.reload() } }
+                        .keyboardShortcut("r")
+                }
+                .disabled(store.cli == nil)
             }
         }
     }

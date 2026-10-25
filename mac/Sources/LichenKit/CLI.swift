@@ -5,44 +5,58 @@ import Foundation
 public struct CLI {
     public var binary: URL
     public var home: String
+    public var environment = ProcessInfo.processInfo.environment
 
     public struct Failure: Error, LocalizedError {
         public var message: String
         public var errorDescription: String? { message }
     }
 
-    /// Finds lichen where it gets installed. LICHEN_BIN points at another.
+    /// Finds lichen as its daemon runs it: the same binary, with the
+    /// environment it was installed with, as an app opened from the Dock
+    /// has launchd's bare one. LICHEN_BIN points at another binary.
     public static func find() -> CLI? {
-        let environment = ProcessInfo.processInfo.environment
+        var environment = ProcessInfo.processInfo.environment
         // lichen goes by HOME, which Foundation's home directory doesn't.
         let home = environment["HOME"] ?? NSHomeDirectory()
         var candidates = ["\(home)/.local/bin/lichen", "/opt/homebrew/bin/lichen", "/usr/local/bin/lichen"]
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: "\(home)/Library/LaunchAgents/dev.lichen.plist")),
+           let daemon = try? PropertyListDecoder().decode(Daemon.self, from: data) {
+            candidates.insert(contentsOf: daemon.ProgramArguments.prefix(1), at: 0)
+            environment.merge(daemon.EnvironmentVariables ?? [:]) { $1 }
+        }
         if let bin = environment["LICHEN_BIN"] {
             candidates.insert(bin, at: 0)
         }
         guard let path = candidates.first(where: FileManager.default.isExecutableFile(atPath:)) else {
             return nil
         }
-        return CLI(binary: URL(fileURLWithPath: path), home: home)
+        return CLI(binary: URL(fileURLWithPath: path), home: home, environment: environment)
+    }
+
+    /// What of the daemon's launchd job says how to run lichen.
+    private struct Daemon: Decodable {
+        var ProgramArguments: [String]
+        var EnvironmentVariables: [String: String]?
     }
 
     /// Runs lichen, returning what it prints. A failure carries what it
     /// said went wrong.
     public func run(_ args: [String]) async throws -> Data {
-        let binary = binary
+        let binary = binary, environment = environment
         // Waiting on it blocks a thread, so not one of the few async ones.
         return try await withCheckedThrowingContinuation { done in
             DispatchQueue.global().async {
-                done.resume(with: Result { try Self.run(binary, args) })
+                done.resume(with: Result { try Self.run(binary, args, environment) })
             }
         }
     }
 
-    private static func run(_ binary: URL, _ args: [String]) throws -> Data {
+    private static func run(_ binary: URL, _ args: [String], _ environment: [String: String]) throws -> Data {
         let process = Process()
         process.executableURL = binary
         process.arguments = args
-        var env = ProcessInfo.processInfo.environment
+        var env = environment
         env["NO_COLOR"] = "1"
         process.environment = env
         let out = Pipe(), err = Pipe()
@@ -96,7 +110,7 @@ public struct CLI {
         do {
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
-            throw Failure(message: "lichen answered in a way this app doesn't understand. Update both to the latest (lichen update).")
+            throw Failure(message: "lichen answered in a way this app doesn't understand. Update lichen (lichen update) and this app to their latest.")
         }
     }
 

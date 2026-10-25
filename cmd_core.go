@@ -181,6 +181,7 @@ func cmdDevices(args []string) error {
 		}
 	}
 	// Devices named in groups count too, known to crosstalk or not.
+	known := len(devices)
 	for _, g := range slices.Sorted(maps.Keys(env.Settings.Groups)) {
 		for _, name := range env.Settings.Groups[g] {
 			if !slices.ContainsFunc(devices, func(d events.Device) bool { return d.Name == name }) {
@@ -202,12 +203,12 @@ func cmdDevices(args []string) error {
 	for _, d := range devices {
 		width = max(width, len(d.Name))
 	}
-	for _, d := range devices {
+	for i, d := range devices {
 		note := ""
 		switch {
 		case d.Self:
 			note = " (this device)"
-		case !d.Online:
+		case !d.Online && i < known:
 			note = " (away)"
 		}
 		fmt.Printf("%-*s  %s%s\n", width, d.Name, strings.Join(env.Settings.GroupsOf(d.Name), ", "), dim(note))

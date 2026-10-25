@@ -10,20 +10,30 @@ final class Store: ObservableObject {
     @Published var loaded = false
     /// Why there is nothing to show, when lichen couldn't list anything.
     @Published var problem: String?
-    @Published var busy = false
+    /// Changes running now.
+    @Published private var changing = 0
+    var busy: Bool { changing > 0 }
     /// What went wrong with the last change.
     @Published var failure: String?
 
     let cli = CLI.find()
+    /// Counts reloads, so one that started before another, and so may
+    /// predate a change, can't overwrite what the later one found.
+    private var reloads = 0
 
     func reload() async {
         guard let cli else { return }
+        reloads += 1
+        let this = reloads
         do {
             async let s = cli.sources()
             async let d = cli.devices()
-            (sources, devices) = try await (s, d)
+            let listed = try await (s, d)
+            guard this == reloads else { return }
+            (sources, devices) = listed
             problem = nil
         } catch {
+            guard this == reloads else { return }
             problem = error.localizedDescription
         }
         loaded = true
@@ -32,8 +42,8 @@ final class Store: ObservableObject {
     /// Runs one change, then shows what it made of things.
     func change(_ args: [String]) async {
         guard let cli else { return }
-        busy = true
-        defer { busy = false }
+        changing += 1
+        defer { changing -= 1 }
         do {
             _ = try await cli.run(args)
         } catch {
@@ -67,11 +77,10 @@ final class Store: ObservableObject {
 
     func open(_ source: Source) {
         guard let cli else { return }
-        let url = URL(fileURLWithPath: cli.expand(source.path))
         if source.dir {
-            NSWorkspace.shared.activateFileViewerSelecting([url])
+            reveal(source.path)
         } else {
-            NSWorkspace.shared.open(url)
+            NSWorkspace.shared.open(URL(fileURLWithPath: cli.expand(source.path)))
         }
     }
 
