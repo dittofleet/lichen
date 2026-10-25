@@ -5,14 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 
 	"golang.org/x/term"
 
-	"lichen/internal/config"
 	"lichen/internal/core"
 	"lichen/internal/files"
 )
@@ -40,13 +37,11 @@ func cmdResolve(args []string) error {
 			p = a
 		}
 	}
-	switch {
-	case p != "" && keep == "" && into == nil:
+	if (p == "") != (keep == "" && into == nil) {
 		return errors.New(resolveUsage)
-	case p != "":
+	}
+	if p != "" {
 		return resolve(p, keep, into)
-	case keep != "" || into != nil:
-		return errors.New(resolveUsage)
 	}
 
 	holds := files.Holds()
@@ -154,34 +149,10 @@ func prompt(in *bufio.Reader, q string) string {
 
 // showDiff shows how a held output differs from what its sources hold.
 func showDiff(env *core.Env, p string) error {
-	synced, err := files.Synced(env, p)
+	d, err := files.Diff(env, p, useColor)
 	if err != nil {
 		return err
 	}
-	abs, err := config.Abs(p)
-	if err != nil {
-		return err
-	}
-	here, err := os.ReadFile(abs)
-	if err != nil {
-		return err
-	}
-	dir, err := os.MkdirTemp("", "lichen-resolve")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(dir)
-	for name, b := range map[string][]byte{"synced": synced, "here": here} {
-		if err := os.WriteFile(filepath.Join(dir, name), b, 0o600); err != nil {
-			return err
-		}
-	}
-	color := "--no-color"
-	if useColor {
-		color = "--color"
-	}
-	cmd := exec.Command("git", "--no-pager", "diff", "--no-index", color, "synced", "here")
-	cmd.Dir, cmd.Stdout = dir, os.Stdout
-	cmd.Run() // exits 1 for a difference, which is the point
-	return nil
+	_, err = os.Stdout.Write(d)
+	return err
 }

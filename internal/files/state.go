@@ -24,13 +24,11 @@ type record struct {
 	Deps   map[string]string `json:"deps"`
 	Groups []string          `json:"groups"`
 	Exec   bool              `json:"exec,omitempty"`
-	// Conflict and Question are set while the output holds an edit made
-	// here that lichen can't take into its sources on its own: one that
-	// doesn't merge with a change from elsewhere, or new lines that could
-	// go to more than one source. Until `lichen resolve`, the output is
-	// left as it is.
-	Conflict bool `json:"conflict,omitempty"`
-	Question bool `json:"question,omitempty"`
+	// Held says why, while the output holds an edit made here that lichen
+	// can't take into its sources on its own: one that doesn't merge with
+	// a change from elsewhere, say, or new lines that could go to more
+	// than one source. Until `lichen resolve`, it is left as it is.
+	Held string `json:"held,omitempty"`
 }
 
 // state is this device's memory of every output it wrote, keyed by
@@ -97,33 +95,35 @@ func hashOf(b []byte) string {
 // output, which is there, keeping its content and that of its sources
 // for later comparisons.
 func (s *state) remember(w want, c *compiled) error {
-	r := &record{Source: w.source, File: w.file, Root: w.root, Hash: hashOf(c.content()), Deps: map[string]string{}, Groups: c.groups, Exec: isExec(w.path)}
-	if err := store(c.content()); err != nil {
+	r := &record{Source: w.source, File: w.file, Root: w.root, Deps: map[string]string{}, Groups: c.groups, Exec: isExec(w.path)}
+	var err error
+	if r.Hash, err = store(c.content()); err != nil {
 		return err
 	}
 	for f, b := range c.deps {
-		if err := store(b); err != nil {
+		if r.Deps[f], err = store(b); err != nil {
 			return err
 		}
-		r.Deps[f] = hashOf(b)
 	}
 	s.Outputs[w.path] = r
 	return nil
 }
 
-func store(content []byte) error {
+// store keeps content by its hash, which it returns.
+func store(content []byte) (string, error) {
 	d, err := stateDir()
 	if err != nil {
-		return err
+		return "", err
 	}
-	obj := filepath.Join(d, "objects", hashOf(content))
+	h := hashOf(content)
+	obj := filepath.Join(d, "objects", h)
 	if _, err := os.Stat(obj); err == nil {
-		return nil
+		return h, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(obj), 0o700); err != nil {
-		return err
+		return "", err
 	}
-	return os.WriteFile(obj, content, 0o600)
+	return h, os.WriteFile(obj, content, 0o600)
 }
 
 func object(hash string) ([]byte, error) {

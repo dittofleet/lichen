@@ -17,5 +17,9 @@ func Send(msg string) {
 	} else {
 		return
 	}
-	cmd.Run()
+	// Not waited for: a pass is no place to sit through a notification
+	// service that is slow to answer, or never does.
+	if cmd.Start() == nil {
+		go cmd.Wait()
+	}
 }

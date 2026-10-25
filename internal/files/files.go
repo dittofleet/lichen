@@ -242,7 +242,7 @@ func (p *pass) captureEdit(w want, rec *record, live []byte) error {
 	case err != nil:
 		return err
 	case len(open) > 0:
-		p.hold(w.path, rec, "")
+		p.hold(w.path, rec, "which source do the new lines go in?")
 		return nil
 	}
 	if err := take(p.env, p.st, w, sources, live); err != nil {
@@ -254,17 +254,14 @@ func (p *pass) captureEdit(w want, rec *record, live []byte) error {
 	return nil
 }
 
-// hold marks an output whose edit waits on `lichen resolve`: a conflict,
-// for why, or else a question. It is said once.
+// hold marks an output whose edit waits on `lichen resolve`, for why. It
+// is said once.
 func (p *pass) hold(out string, rec *record, why string) {
-	if rec.Conflict == (why != "") && rec.Question == (why == "") {
+	if rec.Held == why {
 		return
 	}
-	rec.Conflict, rec.Question = why != "", why == ""
-	msg := config.ContractHome(out) + ": which source do the new lines go in?"
-	if why != "" {
-		msg = config.ContractHome(out) + ": " + why
-	}
+	rec.Held = why
+	msg := config.ContractHome(out) + ": " + why
 	p.env.Log.Printf("files: %s (run `lichen resolve`)", msg)
 	if p.env.Notify != nil {
 		p.env.Notify(msg)
@@ -433,14 +430,19 @@ func (p *pass) release(ws map[string]want, dirs map[string]string) error {
 			p.cfg.Sources[rec.Source] = s
 			delete(dead, rec.Source)
 		}
-		// The source comes back as it was when last written here, to take
-		// the edit like any other.
-		was, err := object(rec.Deps[rec.File])
-		if err != nil {
-			return err
-		}
-		if err := writeFile(sourcePath(p.env, rec.File), was, rec.Exec, false); err != nil {
-			return err
+		// What it was compiled from comes back as it was when last written
+		// here, to take the edit like any other.
+		for f, h := range rec.Deps {
+			if _, err := os.Stat(sourcePath(p.env, f)); err == nil {
+				continue
+			}
+			was, err := object(h)
+			if err != nil {
+				return err
+			}
+			if err := writeFile(sourcePath(p.env, f), was, f == rec.File && rec.Exec, false); err != nil {
+				return err
+			}
 		}
 		if err := p.captureEdit(rec.want(out), rec, live); err != nil {
 			return err
@@ -515,31 +517,28 @@ func keptAt(to string) string {
 // it is.
 type conflict struct{ error }
 
-var errBothEdited = errors.New("edited here and on another device in the same place")
-
 // place works out what an edit to an output here makes of its sources:
 // the new content of each it changes, merged with whatever changed in
 // them elsewhere since. Lines that could go to more than one source come
-// back unplaced, unless choose (if any) places them. An edit that clashes
-// with a change from elsewhere is a conflict, unless ours: then the edit
-// wins where they clash.
-func place(env *core.Env, rec *record, live []byte, choose func(question) (pos, bool), ours bool) (map[string][]byte, []question, error) {
+// back unplaced, unless into places them (see chooser). An edit that
+// clashes with a change from elsewhere is a conflict, unless ours: then
+// the edit wins where they clash.
+func place(env *core.Env, rec *record, live []byte, into []string, ours bool) (map[string][]byte, []question, error) {
 	b, err := base(rec)
 	if err != nil {
 		return nil, nil, conflict{fmt.Errorf("lichen can't tell what changed in it: %w", err)}
 	}
+	// A file that inserts nothing, here or elsewhere, is its output.
+	plain := b.raw != nil || len(b.deps) == 1 && len(b.lines) == len(split(b.deps[rec.File]).lines)
 	var edited map[string][]byte
-	if b.raw != nil || binary(live) {
-		if len(b.deps) > 1 {
-			return nil, nil, conflict{errors.New("it isn't text now, and some of it came from other sources")}
-		}
+	switch {
+	case plain:
 		edited = map[string][]byte{rec.File: escape(live)}
-	} else {
-		if choose == nil {
-			choose = func(question) (pos, bool) { return pos{}, false }
-		}
+	case binary(live):
+		return nil, nil, conflict{errors.New("it isn't text now, and it inserts other sources")}
+	default:
 		var open []question
-		edited, open, err = unmap(b, split(live), choose)
+		edited, open, err = unmap(b, split(live), chooser(into))
 		if errors.Is(err, errClash) {
 			return nil, nil, conflict{err}
 		}
@@ -565,7 +564,7 @@ func place(env *core.Env, rec *record, live []byte, choose func(question) (pos, 
 		case ours:
 			merged = e
 		default:
-			return nil, nil, conflict{errBothEdited}
+			return nil, nil, conflict{errors.New("edited here and on another device in the same place")}
 		}
 		if !bytes.Equal(merged, cur) {
 			sources[f] = merged
@@ -625,33 +624,33 @@ func merge3(base, ours, theirs []byte, favorOurs bool) ([]byte, bool) {
 	case bytes.Equal(base, ours):
 		return theirs, true
 	}
-	for _, b := range [][]byte{base, ours, theirs} {
-		if bytes.IndexByte(b, 0) >= 0 {
-			return nil, false
-		}
-	}
-	dir, err := os.MkdirTemp("", "lichen-merge")
-	if err != nil {
+	if binary(base) || binary(ours) || binary(theirs) {
 		return nil, false
-	}
-	defer os.RemoveAll(dir)
-	names := []string{"ours", "base", "theirs"}
-	for i, b := range [][]byte{ours, base, theirs} {
-		if os.WriteFile(filepath.Join(dir, names[i]), b, 0o600) != nil {
-			return nil, false
-		}
 	}
 	args := []string{"merge-file", "-p", "--quiet"}
 	if favorOurs {
 		args = append(args, "--ours")
 	}
-	cmd := exec.Command("git", append(args, "ours", "base", "theirs")...)
-	cmd.Dir = dir
-	out, err := cmd.Output()
+	out, err := gitOn(map[string][]byte{"ours": ours, "base": base, "theirs": theirs}, append(args, "ours", "base", "theirs")...)
+	return out, err == nil
+}
+
+// gitOn runs git on content, each in a file of its name in a directory of
+// their own, and returns what it prints.
+func gitOn(files map[string][]byte, args ...string) ([]byte, error) {
+	dir, err := os.MkdirTemp("", "lichen")
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
-	return out, true
+	defer os.RemoveAll(dir)
+	for name, b := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), b, 0o600); err != nil {
+			return nil, err
+		}
+	}
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	return cmd.Output()
 }
 
 // writeFile replaces path's content, keeping an existing file's

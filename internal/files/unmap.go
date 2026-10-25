@@ -3,9 +3,7 @@ package files
 import (
 	"bytes"
 	"errors"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -50,14 +48,14 @@ func unmap(base *compiled, live text, choose func(question) (pos, bool)) (map[st
 				if base.out.lines[h.a+i] == added[i] {
 					continue
 				}
-				if err := ed(o.file).replace(o.line, lines[i:i+1]); err != nil {
+				if err := set(ed(o.file).repl, o.line, lines[i:i+1]); err != nil {
 					return nil, nil, err
 				}
 			}
 			continue
 		}
 		for _, o := range old {
-			if err := ed(o.file).replace(o.line, nil); err != nil {
+			if err := set(ed(o.file).repl, o.line, nil); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -78,7 +76,7 @@ func unmap(base *compiled, live text, choose func(question) (pos, bool)) (map[st
 				continue
 			}
 		}
-		if err := ed(at.file).insert(at.line, lines); err != nil {
+		if err := set(ed(at.file).ins, at.line, lines); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -108,19 +106,13 @@ type edit struct {
 	ins  map[int][]string
 }
 
-func (e *edit) replace(line int, with []string) error {
-	if prev, ok := e.repl[line]; ok && !slices.Equal(prev, with) {
+// set records what an edit does at a line, unless it does something else
+// there already.
+func set(m map[int][]string, line int, lines []string) error {
+	if prev, ok := m[line]; ok && !slices.Equal(prev, lines) {
 		return errClash
 	}
-	e.repl[line] = with
-	return nil
-}
-
-func (e *edit) insert(line int, lines []string) error {
-	if prev, ok := e.ins[line]; ok && !slices.Equal(prev, lines) {
-		return errClash
-	}
-	e.ins[line] = lines
+	m[line] = lines
 	return nil
 }
 
@@ -138,6 +130,25 @@ func (e *edit) apply(t text) text {
 		}
 	}
 	return text{lines: append(out, e.ins[len(t.lines)]...), eol: t.eol}
+}
+
+// chooser answers questions with into, in turn: the source named for
+// each, the last one for any after it.
+func chooser(into []string) func(question) (pos, bool) {
+	i := 0
+	return func(q question) (pos, bool) {
+		if len(into) == 0 {
+			return pos{}, false
+		}
+		name := into[min(i, len(into)-1)]
+		i++
+		for _, s := range q.spots {
+			if s.file == name {
+				return s, true
+			}
+		}
+		return pos{}, false
+	}
 }
 
 // firstPerFile keeps the first of spots in each file.
@@ -158,21 +169,9 @@ type hunk struct{ a, b, c, d int }
 
 // diff lists the changes from old to new, the way git finds them.
 func diff(old, new []string) ([]hunk, error) {
-	dir, err := os.MkdirTemp("", "lichen-diff")
+	out, err := gitDiff(map[string][]byte{"old": text{lines: old, eol: true}.bytes(), "new": text{lines: new, eol: true}.bytes()},
+		"--no-color", "--no-ext-diff", "--text", "-U0", "--inter-hunk-context=0", "old", "new")
 	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(dir)
-	for name, lines := range map[string][]string{"old": old, "new": new} {
-		if err := os.WriteFile(filepath.Join(dir, name), text{lines: lines, eol: true}.bytes(), 0o600); err != nil {
-			return nil, err
-		}
-	}
-	cmd := exec.Command("git", "diff", "--no-index", "--no-color", "--no-ext-diff", "--text", "-U0", "--inter-hunk-context=0", "old", "new")
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	var exit *exec.ExitError
-	if err != nil && !(errors.As(err, &exit) && exit.ExitCode() == 1) {
 		return nil, err
 	}
 	var hunks []hunk
@@ -187,6 +186,17 @@ func diff(old, new []string) ([]hunk, error) {
 		hunks = append(hunks, h)
 	}
 	return hunks, nil
+}
+
+// gitDiff runs git diff --no-index on two of files, which tells a
+// difference apart from a failure by its exit code alone.
+func gitDiff(files map[string][]byte, args ...string) ([]byte, error) {
+	out, err := gitOn(files, append([]string{"--no-pager", "diff", "--no-index"}, args...)...)
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		err = nil
+	}
+	return out, err
 }
 
 // span reads a hunk header's start,count: 1-based, and naming the line

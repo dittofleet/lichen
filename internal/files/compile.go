@@ -70,6 +70,11 @@ func directive(line string) (name string, groups []string, err error) {
 		if len(groups) == 0 {
 			return "", nil, fmt.Errorf("%q: `if` takes devices or groups", line)
 		}
+		for _, g := range groups {
+			if err := core.ValidGroup(g); err != nil {
+				return "", nil, err
+			}
+		}
 	}
 	return name, groups, nil
 }
@@ -134,6 +139,7 @@ func compile(file string, read func(string) ([]byte, error), groups []string) (*
 			return fmt.Errorf("%s is not text, so it can't be inserted", name)
 		}
 		t := split(b)
+		chain := append(slices.Clone(inside), name)
 		c.spot(name, 0)
 		for i, l := range t.lines {
 			switch {
@@ -144,7 +150,6 @@ func compile(file string, read func(string) ([]byte, error), groups []string) (*
 				if err != nil {
 					return fmt.Errorf("%s line %d: %w", name, i+1, err)
 				}
-				chain := append(slices.Clone(inside), name)
 				if slices.Contains(chain, ins) {
 					return fmt.Errorf("inserts go in a circle: %s", strings.Join(append(chain, ins), " > "))
 				}

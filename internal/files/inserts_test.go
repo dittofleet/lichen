@@ -3,6 +3,7 @@ package files_test
 import (
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"lichen/internal/core"
@@ -83,7 +84,7 @@ func TestAmbiguousLinesWaitForResolve(t *testing.T) {
 	expect(t, a, "lichen/files/zshrc", "top\n§ zsh/common\nend\n")
 	expect(t, a, "lichen/files/zsh/common", "c1\nc2\n")
 	a.use()
-	if h := files.Holds(); len(h) != 1 || h[0].Conflict {
+	if h := files.Holds(); len(h) != 1 || !strings.Contains(h[0].Why, "which source") {
 		t.Fatalf("holds = %v, want a question", h)
 	}
 	qs, conflicting, err := files.Inspect(a.env(), a.path(".zshrc"), nil)
@@ -116,7 +117,7 @@ func TestInsertConflict(t *testing.T) {
 	b.sync()
 	expect(t, b, ".bashrc", "banana\nc2\n")
 	b.use()
-	if h := files.Holds(); len(h) != 1 || !h[0].Conflict {
+	if h := files.Holds(); len(h) != 1 || !strings.Contains(h[0].Why, "same place") {
 		t.Fatalf("holds = %v, want a conflict at ~/.bashrc", h)
 	}
 	// The edit that merges went through, and with it apple's edit.
@@ -180,4 +181,46 @@ func TestEditBeatsDeletionWithInserts(t *testing.T) {
 	expect(t, b, ".bashrc", "C1\nc2\n")
 	a.sync()
 	expect(t, a, ".zshrc", "top\nC1\nc2\nend, edited\n")
+}
+
+// An output that is no longer text, from a source that inserts others
+// (on some device), is a conflict: taking it would lose the inserts.
+func TestBinaryOverInsertsIsAConflict(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write(".zshrc", "")
+	a.add(".zshrc")
+	a.write("lichen/files/zshrc", "top\n§ zsh/banana if banana\n")
+	a.sync()
+	a.write(".zshrc", "\x00binary")
+	a.sync()
+	expect(t, a, "lichen/files/zshrc", "top\n§ zsh/banana if banana\n")
+	a.use()
+	if h := files.Holds(); len(h) != 1 || !strings.Contains(h[0].Why, "isn't text") {
+		t.Fatalf("holds = %v, want a conflict", h)
+	}
+}
+
+// An edit beats the deletion of a whole directory, including the files of
+// it the edited one inserts.
+func TestEditBeatsDeletionOfWhatItInserts(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write(".config/zsh/main", "")
+	a.write(".config/zsh/part", "p1\n")
+	a.add(".config/zsh")
+	a.write("lichen/files/config/zsh/main", "m1\n§ config/zsh/part\n")
+	a.sync()
+	b := newDevice(t, remote, "banana")
+	expect(t, b, ".config/zsh/main", "m1\np1\n")
+
+	os.RemoveAll(a.path(".config/zsh"))
+	a.sync()
+	b.write(".config/zsh/main", "m1\nP1\n")
+	b.sync()
+	expect(t, b, "lichen/files/config/zsh/main", "m1\n§ config/zsh/part\n")
+	expect(t, b, "lichen/files/config/zsh/part", "P1\n")
+	b.sync()
+	a.sync()
+	expect(t, a, ".config/zsh/main", "m1\nP1\n")
 }

@@ -313,7 +313,7 @@ func TestConflictWaitsForResolve(t *testing.T) {
 	b.sync()
 	expect(t, b, ".zshrc", "banana\n")
 	b.use()
-	if h := files.Holds(); len(h) != 1 || !h[0].Conflict || !strings.HasSuffix(h[0].Path, ".zshrc") {
+	if h := files.Holds(); len(h) != 1 || !strings.Contains(h[0].Why, "same place") || !strings.HasSuffix(h[0].Path, ".zshrc") {
 		t.Fatalf("holds = %v, want a conflict at ~/.zshrc", h)
 	}
 

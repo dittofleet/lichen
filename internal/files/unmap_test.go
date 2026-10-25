@@ -25,15 +25,7 @@ func unmapped(t *testing.T, srcs map[string]string, live string, into string) (m
 	if err != nil {
 		t.Fatal(err)
 	}
-	choose := func(q question) (pos, bool) {
-		for _, s := range q.spots {
-			if s.file == into {
-				return s, true
-			}
-		}
-		return pos{}, false
-	}
-	out, open, err := unmap(base, split([]byte(live)), choose)
+	out, open, err := unmap(base, split([]byte(live)), chooser([]string{into}))
 	got := map[string]string{}
 	for f, b := range out {
 		got[f] = string(b)

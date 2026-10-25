@@ -58,6 +58,7 @@ func TestCompileErrors(t *testing.T) {
 		"self":      {map[string]string{"a": "x\n§ a if mac\n"}, "a > a"},
 		"no space":  {map[string]string{"a": "§b\n"}, "§§"},
 		"empty if":  {map[string]string{"a": "§ b if \n", "b": ""}, "`if` takes"},
+		"bad group": {map[string]string{"a": "§ b if Mac\n", "b": ""}, "not a device or group"},
 		"bad name":  {map[string]string{"a": "§ ../b\n"}, "not a usable source name"},
 		"binary in": {map[string]string{"a": "§ b\n", "b": "\x00"}, "not text"},
 	} {

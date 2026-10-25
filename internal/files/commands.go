@@ -333,31 +333,21 @@ func Resolve(env *core.Env, p, keep string, into []string) error {
 	if err != nil {
 		return err
 	}
-	w := rec.want(abs)
-	if keep == "synced" {
-		c, err := build(env, w.file)
-		if err != nil {
+	var sources map[string][]byte
+	if keep != "synced" {
+		var open []question
+		sources, open, err = place(env, rec, live, into, keep == "here")
+		var c conflict
+		switch {
+		case errors.As(err, &c):
+			return fmt.Errorf("%s: %v (--keep here or --keep synced)", p, c)
+		case err != nil:
 			return err
+		case len(open) > 0:
+			return fmt.Errorf("%s: the new lines could go in %s (--into one of them)", p, strings.Join(sourcesOf(open[0]), ", "))
 		}
-		if err := writeFile(abs, c.content(), isExec(abs), false); err != nil {
-			return err
-		}
-		if err := st.remember(w, c); err != nil {
-			return err
-		}
-		return st.save()
 	}
-	sources, open, err := place(env, rec, live, chooser(into), keep == "here")
-	var c conflict
-	switch {
-	case errors.As(err, &c):
-		return fmt.Errorf("%s: %v (--keep here or --keep synced)", p, c)
-	case err != nil:
-		return err
-	case len(open) > 0:
-		return fmt.Errorf("%s: the new lines could go in %s (--into one of them)", p, strings.Join(sourcesOf(open[0]), ", "))
-	}
-	if err := take(env, st, w, sources, live); err != nil {
+	if err := take(env, st, rec.want(abs), sources, live); err != nil {
 		return err
 	}
 	return st.save()
@@ -378,7 +368,7 @@ func Inspect(env *core.Env, p string, into []string) (questions []Question, conf
 	if err != nil {
 		return nil, "", err
 	}
-	_, open, err := place(env, rec, live, chooser(into), false)
+	_, open, err := place(env, rec, live, into, false)
 	var c conflict
 	if errors.As(err, &c) {
 		return nil, c.Error(), nil
@@ -389,10 +379,9 @@ func Inspect(env *core.Env, p string, into []string) (questions []Question, conf
 	return questions, "", err
 }
 
-// Synced is what a held output's sources compile to, as resolving it
-// with keep "synced" would write it.
-func Synced(env *core.Env, p string) ([]byte, error) {
-	_, _, rec, _, err := held(p)
+// Diff shows how a held output differs from what its sources compile to.
+func Diff(env *core.Env, p string, color bool) ([]byte, error) {
+	_, _, rec, live, err := held(p)
 	if err != nil {
 		return nil, err
 	}
@@ -400,7 +389,11 @@ func Synced(env *core.Env, p string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return c.content(), nil
+	colors := "--no-color"
+	if color {
+		colors = "--color"
+	}
+	return gitDiff(map[string][]byte{"synced": c.content(), "here": live}, colors, "synced", "here")
 }
 
 func held(p string) (abs string, st *state, rec *record, live []byte, err error) {
@@ -410,30 +403,12 @@ func held(p string) (abs string, st *state, rec *record, live []byte, err error)
 	if st, err = loadState(); err != nil {
 		return
 	}
-	if rec = st.Outputs[abs]; rec == nil || !rec.Conflict && !rec.Question {
+	if rec = st.Outputs[abs]; rec == nil || rec.Held == "" {
 		err = fmt.Errorf("%s has nothing to resolve", p)
 		return
 	}
 	live, err = os.ReadFile(abs)
 	return
-}
-
-// chooser answers questions with into, in turn.
-func chooser(into []string) func(question) (pos, bool) {
-	i := 0
-	return func(q question) (pos, bool) {
-		if len(into) == 0 {
-			return pos{}, false
-		}
-		name := into[min(i, len(into)-1)]
-		i++
-		for _, s := range q.spots {
-			if s.file == name {
-				return s, true
-			}
-		}
-		return pos{}, false
-	}
 }
 
 func sourcesOf(q question) []string {
@@ -465,23 +440,23 @@ func List(env *core.Env) ([]Entry, error) {
 	return entries, nil
 }
 
-// Held is an output holding an edit made on this device that waits on
-// `lichen resolve`.
-type Held struct {
-	Path     string // ~/-relative
-	Conflict bool   // or else a question
+// Hold is an output holding an edit made on this device that waits on
+// `lichen resolve`, and why.
+type Hold struct {
+	Path string // ~/-relative
+	Why  string
 }
 
 // Holds lists this device's held outputs.
-func Holds() []Held {
+func Holds() []Hold {
 	st, err := loadState()
 	if err != nil {
 		return nil
 	}
-	var out []Held
+	var out []Hold
 	for _, p := range slices.Sorted(maps.Keys(st.Outputs)) {
-		if r := st.Outputs[p]; r.Conflict || r.Question {
-			out = append(out, Held{Path: config.ContractHome(p), Conflict: r.Conflict})
+		if r := st.Outputs[p]; r.Held != "" {
+			out = append(out, Hold{Path: config.ContractHome(p), Why: r.Held})
 		}
 	}
 	return out

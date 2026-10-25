@@ -82,9 +82,7 @@ func cmdPostinstall() error {
 		}
 		url := os.Getenv("LICHEN_REPO")
 		if url == "" && term.IsTerminal(int(os.Stdin.Fd())) {
-			fmt.Print("Sync repo git URL (an empty private repo for your first device, empty to set up later): ")
-			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-			url = strings.TrimSpace(line)
+			url = prompt(bufio.NewReader(os.Stdin), "Sync repo git URL (an empty private repo for your first device, empty to set up later): ")
 		}
 		if url == "" {
 			fmt.Println("Run `lichen setup <git url>` to set this device up.")
@@ -147,11 +145,7 @@ func cmdStatus() error {
 	if holds := files.Holds(); len(holds) > 0 {
 		fmt.Printf("\n%s edits here that lichen can't place on its own (lichen resolve):\n", paint("31", "waiting:"))
 		for _, h := range holds {
-			why := "new lines that could go in more than one source"
-			if h.Conflict {
-				why = "a conflict"
-			}
-			fmt.Printf("  %s  %s\n", h.Path, dim(why))
+			fmt.Printf("  %s  %s\n", h.Path, dim(h.Why))
 		}
 	}
 	if backup.NonEmpty() {
