@@ -82,9 +82,7 @@ func cmdPostinstall() error {
 		}
 		url := os.Getenv("LICHEN_REPO")
 		if url == "" && term.IsTerminal(int(os.Stdin.Fd())) {
-			fmt.Print("Sync repo git URL (an empty private repo for your first device, empty to set up later): ")
-			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-			url = strings.TrimSpace(line)
+			url = prompt(bufio.NewReader(os.Stdin), "Sync repo git URL (an empty private repo for your first device, empty to set up later): ")
 		}
 		if url == "" {
 			fmt.Println("Run `lichen setup <git url>` to set this device up.")
@@ -144,10 +142,16 @@ func cmdStatus() error {
 		}
 		fmt.Printf("%s %s\n", bold("mcp:"), strings.Join(names, ", "))
 	}
-	if conflicts := files.Conflicts(); len(conflicts) > 0 {
-		fmt.Printf("\n%s edited here and on another device at once:\n", paint("31", "conflicts:"))
-		for _, c := range conflicts {
-			fmt.Printf("  %s  %s\n", c, dim("lichen files resolve "+c+" --keep here|synced"))
+	if broken := files.Broken(env); len(broken) > 0 {
+		fmt.Printf("\n%s not synced until their sources compile:\n", paint("31", "broken:"))
+		for _, b := range broken {
+			fmt.Printf("  %s  %s\n", b.Path, dim(b.Why))
+		}
+	}
+	if holds := files.Holds(); len(holds) > 0 {
+		fmt.Printf("\n%s edits here that lichen can't place on its own (lichen resolve):\n", paint("31", "waiting:"))
+		for _, h := range holds {
+			fmt.Printf("  %s  %s\n", h.Path, dim(h.Why))
 		}
 	}
 	if backup.NonEmpty() {

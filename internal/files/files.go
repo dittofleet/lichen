@@ -176,10 +176,7 @@ func (p *pass) captureNew(ws map[string]want, dirs map[string]string) error {
 				continue
 			}
 			w := want{source: source, file: source + "/" + rel, path: out, root: root, dir: true}
-			if err := writeFile(sourcePath(p.env, w.file), content, isExec(out), false); err != nil {
-				return err
-			}
-			if err := p.st.remember(w, content); err != nil {
+			if err := track(p.env, p.st, w, content); err != nil {
 				return err
 			}
 			if s := p.cfg.Sources[source]; !s.Private && private(out) {
@@ -196,25 +193,24 @@ func (p *pass) captureNew(ws map[string]want, dirs map[string]string) error {
 	return nil
 }
 
-// capture takes local edits and deletions of outputs into their sources,
-// wherever the source has not changed since lichen wrote the output. A
-// source that changed too is merged by apply instead.
+// capture takes local edits and deletions of outputs into their sources.
+// An edit is merged with whatever changed in them elsewhere since. A
+// deletion counts unless the output's sources changed meanwhile, which
+// brings it back instead.
 func (p *pass) capture(ws map[string]want) error {
 	for _, out := range slices.Sorted(maps.Keys(ws)) {
 		w := ws[out]
 		rec := p.st.Outputs[out]
 		// Behind a symlink, a missing file says nothing about deletion.
-		if rec == nil || rec.Conflict || underSymlink(p.home, out) {
-			continue
-		}
-		src, err := os.ReadFile(sourcePath(p.env, w.file))
-		if err != nil || hashOf(src) != rec.Hash {
+		if rec == nil || underSymlink(p.home, out) {
 			continue
 		}
 		fi, err := os.Lstat(out)
 		if errors.Is(err, fs.ErrNotExist) {
-			if err := p.captureDeletion(w); err != nil {
-				return err
+			if c, err := build(p.env, w.file); err == nil && hashOf(c.content()) == rec.Hash {
+				if err := p.captureDeletion(w); err != nil {
+					return err
+				}
 			}
 			continue
 		}
@@ -225,15 +221,51 @@ func (p *pass) capture(ws map[string]want) error {
 		if err != nil || hashOf(live) == rec.Hash {
 			continue
 		}
-		if err := writeFile(sourcePath(p.env, w.file), live, isExec(out), false); err != nil {
+		if err := p.captureEdit(w, rec, live); err != nil {
 			return err
 		}
-		if err := p.st.remember(w, live); err != nil {
-			return err
-		}
-		p.note("edit " + config.ContractHome(out))
 	}
 	return nil
+}
+
+// captureEdit takes an edit made to an output here into its sources, and
+// writes the output again if they now compile to something else (with a
+// change from elsewhere merged in, say). An edit lichen can't take on its
+// own is held: the output stays as it is until `lichen resolve`.
+func (p *pass) captureEdit(w want, rec *record, live []byte) error {
+	sources, open, err := place(p.env, rec, live, nil, false)
+	var c conflict
+	switch {
+	case errors.As(err, &c):
+		p.hold(w.path, rec, c.Error())
+		return nil
+	case err != nil:
+		return err
+	case len(open) > 0:
+		p.hold(w.path, rec, "which source do the new lines go in?")
+		return nil
+	}
+	if err := take(p.env, p.st, w, sources, live); err != nil {
+		return err
+	}
+	if len(sources) > 0 {
+		p.note("edit " + config.ContractHome(w.path))
+	}
+	return nil
+}
+
+// hold marks an output whose edit waits on `lichen resolve`, for why. It
+// is said once.
+func (p *pass) hold(out string, rec *record, why string) {
+	if rec.Held == why {
+		return
+	}
+	rec.Held = why
+	msg := config.ContractHome(out) + ": " + why
+	p.env.Log.Printf("files: %s (run `lichen resolve`)", msg)
+	if p.env.Notify != nil {
+		p.env.Notify(msg)
+	}
 }
 
 // captureDeletion deletes the source of an output deleted here: one file
@@ -259,19 +291,22 @@ func (p *pass) captureDeletion(w want) error {
 	return nil
 }
 
-// apply writes every output whose source moved on, merging when the
-// output was edited here as well.
+// apply writes every output whose sources moved on, unless it holds an
+// edit made here that waits on `lichen resolve`.
 func (p *pass) apply(ws map[string]want) error {
 	written := 0
 	for _, out := range slices.Sorted(maps.Keys(ws)) {
 		w := ws[out]
-		srcPath := sourcePath(p.env, w.file)
-		src, err := os.ReadFile(srcPath)
-		if err != nil {
-			continue
-		}
 		if underSymlink(p.home, out) {
 			p.env.Log.Printf("files: NOT syncing %s (a symlink sits above it)", config.ContractHome(out))
+			continue
+		}
+		c, err := build(p.env, w.file)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			p.env.Log.Printf("files: NOT syncing %s: %v", config.ContractHome(out), err)
 			continue
 		}
 		rec := p.st.Outputs[out]
@@ -298,18 +333,28 @@ func (p *pass) apply(ws map[string]want) error {
 			if err != nil {
 				continue
 			}
-			done, err := p.reconcileExisting(w, rec, live, src)
-			if err != nil {
-				return err
-			}
-			if done {
+			switch {
+			case bytes.Equal(live, c.content()):
+				if err := p.st.remember(w, c); err != nil {
+					return err
+				}
 				continue
+			case rec == nil:
+				// A file this device had before it synced this one: the
+				// synced version replaces it.
+				to, err := backup.Discard(out, p.env.Settings.Backups)
+				if err != nil {
+					return fmt.Errorf("replacing %s: %w", out, err)
+				}
+				p.env.Log.Printf("files: replacing local %s with the synced version%s", config.ContractHome(out), keptAt(to))
+			case hashOf(live) != rec.Hash:
+				continue // edited here, and held
 			}
 		}
-		if err := writeFile(out, src, isExec(srcPath), p.cfg.Sources[w.source].Private); err != nil {
+		if err := writeFile(out, c.content(), isExec(sourcePath(p.env, w.file)), p.cfg.Sources[w.source].Private); err != nil {
 			return err
 		}
-		if err := p.st.remember(w, src); err != nil {
+		if err := p.st.remember(w, c); err != nil {
 			return err
 		}
 		written++
@@ -318,49 +363,6 @@ func (p *pass) apply(ws map[string]want) error {
 		p.env.Log.Printf("files: wrote %d output(s)", written)
 	}
 	return nil
-}
-
-// reconcileExisting handles an output that exists, reporting whether it
-// is settled (true) or should be overwritten with the source (false).
-func (p *pass) reconcileExisting(w want, rec *record, live, src []byte) (bool, error) {
-	out := w.path
-	switch {
-	case bytes.Equal(live, src):
-		return true, p.st.remember(w, src)
-	case rec == nil:
-		// A file this device had before it synced this one: the synced
-		// version replaces it.
-		to, err := backup.Discard(out, p.env.Settings.Backups)
-		if err != nil {
-			return false, fmt.Errorf("replacing %s: %w", out, err)
-		}
-		p.env.Log.Printf("files: replacing local %s with the synced version%s", config.ContractHome(out), keptAt(to))
-		return false, nil
-	case hashOf(live) == rec.Hash:
-		return false, nil // only the source moved on
-	case hashOf(src) == rec.Hash:
-		return true, nil // edited here, held by an unresolved conflict
-	}
-	b, err := base(rec)
-	if err != nil {
-		return true, err
-	}
-	merged, ok := merge3(b, live, src)
-	if !ok {
-		if !rec.Conflict {
-			rec.Conflict = true
-			p.env.Log.Printf("files: CONFLICT in %s: edited here and on another device in the same place. Run `lichen files resolve %s --keep here` or `--keep synced`", config.ContractHome(out), config.ContractHome(out))
-		}
-		return true, nil
-	}
-	if err := writeFile(out, merged, isExec(out), false); err != nil {
-		return true, err
-	}
-	if err := writeFile(sourcePath(p.env, w.file), merged, isExec(out), false); err != nil {
-		return true, err
-	}
-	p.note("merge " + config.ContractHome(out))
-	return true, p.st.remember(w, merged)
 }
 
 // syncModes carries a change of the executable bit, whichever side made
@@ -428,10 +430,31 @@ func (p *pass) release(ws map[string]want, dirs map[string]string) error {
 			p.cfg.Sources[rec.Source] = s
 			delete(dead, rec.Source)
 		}
-		if err := writeFile(sourcePath(p.env, rec.File), live, isExec(out), false); err != nil {
-			return err
+		// What it was compiled from comes back as it was when last written
+		// here, to take the edit like any other, executable as its output
+		// here is.
+		for f, h := range rec.Deps {
+			if _, err := os.Stat(sourcePath(p.env, f)); err == nil {
+				continue
+			}
+			was, err := object(h)
+			if err != nil {
+				return err
+			}
+			exec := isExec(out)
+			if f != rec.File {
+				exec = false
+				for o, r := range p.st.Outputs {
+					if r.File == f {
+						exec = isExec(o)
+					}
+				}
+			}
+			if err := writeFile(sourcePath(p.env, f), was, exec, false); err != nil {
+				return err
+			}
 		}
-		if err := p.st.remember(rec.want(out), live); err != nil {
+		if err := p.captureEdit(rec.want(out), rec, live); err != nil {
 			return err
 		}
 		revived[rec.Source] = true
@@ -500,32 +523,160 @@ func keptAt(to string) string {
 	return " (kept in " + config.ContractHome(to) + ")"
 }
 
-// merge3 merges two edits of base, as git would. ok is false when they
-// overlap, or either side is binary.
-func merge3(base, ours, theirs []byte) ([]byte, bool) {
-	for _, b := range [][]byte{base, ours, theirs} {
-		if bytes.IndexByte(b, 0) >= 0 {
-			return nil, false
+// conflict is why an edit made here can't be taken into its sources as
+// it is. Keeping it anyway (`lichen resolve --keep here`) settles a merge
+// that clashes, but nothing else.
+type conflict struct {
+	error
+	keepable bool
+}
+
+// place works out what an edit to an output here makes of its sources:
+// the new content of each it changes, merged with whatever changed in
+// them elsewhere since. Lines that could go to more than one source come
+// back unplaced, unless into places them (see chooser). An edit that
+// clashes with a change from elsewhere is a conflict, unless ours: then
+// the edit wins where they clash.
+func place(env *core.Env, rec *record, live []byte, into []string, ours bool) (map[string][]byte, []question, error) {
+	b, err := base(rec)
+	if err != nil {
+		return nil, nil, conflict{fmt.Errorf("lichen can't tell what changed in it: %w", err), false}
+	}
+	var edited map[string][]byte
+	switch {
+	case !b.inserts:
+		edited = map[string][]byte{rec.File: escape(live)}
+	case binary(live):
+		return nil, nil, conflict{errors.New("it isn't text now, and it inserts other sources"), false}
+	default:
+		var open []question
+		edited, open, err = unmap(b, split(live), chooser(into))
+		if errors.Is(err, errClash) {
+			return nil, nil, conflict{err, false}
+		}
+		if err != nil || len(open) > 0 {
+			return nil, open, err
 		}
 	}
-	dir, err := os.MkdirTemp("", "lichen-merge")
+
+	// The sources as they are now, with any it edits that were deleted
+	// elsewhere back: an edit beats a deletion.
+	back := map[string][]byte{}
+	for f, e := range edited {
+		if _, err := os.Stat(sourcePath(env, f)); errors.Is(err, fs.ErrNotExist) {
+			back[f] = e
+		}
+	}
+	now, err := compile(rec.File, func(name string) ([]byte, error) {
+		if b, ok := back[name]; ok {
+			return b, nil
+		}
+		return os.ReadFile(sourcePath(env, name))
+	}, env.Device.Groups)
 	if err != nil {
+		return nil, nil, conflict{fmt.Errorf("edited here, and its sources don't compile now: %w", err), false}
+	}
+	for f := range edited {
+		if _, ok := now.deps[f]; !ok {
+			return nil, nil, conflict{fmt.Errorf("edited here, and it no longer inserts %s", f), false}
+		}
+	}
+	sources := map[string][]byte{}
+	for f, e := range edited {
+		cur := now.deps[f]
+		merged, ok := merge3(b.deps[f], e, cur, ours)
+		switch {
+		case ok:
+		case ours:
+			merged = e
+		default:
+			return nil, nil, conflict{errors.New("edited here, and its sources elsewhere, in the same place"), true}
+		}
+		if _, gone := back[f]; gone || !bytes.Equal(merged, cur) {
+			sources[f] = merged
+		}
+	}
+	return sources, nil, nil
+}
+
+// take writes the sources an edit made here changed, then the output
+// compiled from them, unless it holds that already (live), and remembers
+// it.
+func take(env *core.Env, st *state, w want, sources map[string][]byte, live []byte) error {
+	for _, f := range slices.Sorted(maps.Keys(sources)) {
+		path := sourcePath(env, f)
+		if err := writeFile(path, sources[f], isExec(path), false); err != nil {
+			return err
+		}
+	}
+	c, err := build(env, w.file)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(c.content(), live) {
+		if err := writeFile(w.path, c.content(), isExec(w.path), false); err != nil {
+			return err
+		}
+	}
+	return st.remember(w, c)
+}
+
+// track starts syncing a file found at an output, as a new source file.
+func track(env *core.Env, st *state, w want, content []byte) error {
+	if err := writeFile(sourcePath(env, w.file), escape(content), isExec(w.path), false); err != nil {
+		return err
+	}
+	c, err := build(env, w.file)
+	if err != nil {
+		return err
+	}
+	return st.remember(w, c)
+}
+
+// build compiles a source file for this device.
+func build(env *core.Env, file string) (*compiled, error) {
+	return compile(file, func(name string) ([]byte, error) {
+		return os.ReadFile(sourcePath(env, name))
+	}, env.Device.Groups)
+}
+
+// merge3 merges two edits of base, as git would. ok is false when they
+// overlap (unless favorOurs: then ours is taken where they do), or any
+// is binary.
+func merge3(base, ours, theirs []byte, favorOurs bool) ([]byte, bool) {
+	switch {
+	case bytes.Equal(base, theirs):
+		return ours, true
+	case bytes.Equal(base, ours):
+		return theirs, true
+	}
+	if binary(base) || binary(ours) || binary(theirs) {
 		return nil, false
+	}
+	args := []string{"merge-file", "-p", "--quiet"}
+	if favorOurs {
+		args = append(args, "--ours")
+	}
+	out, err := gitOn(map[string][]byte{"ours": ours, "base": base, "theirs": theirs}, append(args, "ours", "base", "theirs")...)
+	return out, err == nil
+}
+
+// gitOn runs git on content, each in a file of its name in a directory of
+// their own, and returns what it prints.
+func gitOn(files map[string][]byte, args ...string) ([]byte, error) {
+	dir, err := os.MkdirTemp("", "lichen")
+	if err != nil {
+		return nil, err
 	}
 	defer os.RemoveAll(dir)
-	names := []string{"ours", "base", "theirs"}
-	for i, b := range [][]byte{ours, base, theirs} {
-		if os.WriteFile(filepath.Join(dir, names[i]), b, 0o600) != nil {
-			return nil, false
+	for name, b := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), b, 0o600); err != nil {
+			return nil, err
 		}
 	}
-	cmd := exec.Command("git", "merge-file", "-p", "--quiet", "ours", "base", "theirs")
+	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, false
-	}
-	return out, true
+	return cmd.Output()
 }
 
 // writeFile replaces path's content, keeping an existing file's

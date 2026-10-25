@@ -1,8 +1,9 @@
 // Package files is lichen's files module. A source is a file or directory
 // in the sync folder's files/ directory, and files.json says where each
-// one goes: its outputs, each a path plus the devices it is for. Every
-// device writes the outputs meant for it, and an edit to an output is
-// captured back into its source, so editing either side syncs. lichen
+// one goes: its outputs, each a path plus the devices it is for. A source
+// file can insert others (see compile.go). Every device writes the
+// outputs meant for it, and an edit to an output is captured back into
+// the sources its lines came from, so editing either side syncs. lichen
 // remembers what it last wrote to every output (internal state, outside
 // the sync folder), which is what tells a local edit from an incoming
 // one, and is the base when both happen at once.

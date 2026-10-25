@@ -25,6 +25,7 @@ import (
 	"lichen/internal/events"
 	"lichen/internal/files"
 	"lichen/internal/module"
+	"lichen/internal/notify"
 	"lichen/internal/proclock"
 	"lichen/internal/selfupdate"
 	"lichen/internal/version"
@@ -130,6 +131,7 @@ func pass(ctx context.Context, lg *log.Logger, pull bool) (w watched, ok bool) {
 			lg.Printf("%v", err)
 			return
 		}
+		env.Notify = notify.Send
 		if pull {
 			err = module.Pass(env, true)
 		} else {

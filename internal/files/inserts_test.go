@@ -1,0 +1,298 @@
+package files_test
+
+import (
+	"os"
+	"slices"
+	"strings"
+	"testing"
+
+	"lichen/internal/core"
+	"lichen/internal/files"
+)
+
+// zshDevices sets up apple and banana syncing ~/.zshrc, which inserts
+// zsh/common, as is ~/.bashrc on banana.
+func zshDevices(t *testing.T) (a, b *device) {
+	remote := newRemote(t)
+	a = newDevice(t, remote, "apple")
+	a.write(".zshrc", "top\n")
+	a.add(".zshrc")
+	a.write("lichen/files/zshrc", "top\n§ zsh/common\nend\n")
+	a.write("lichen/files/zsh/common", "c1\nc2\n")
+	a.sync()
+	b = newDevice(t, remote, "banana")
+	b.write(".bashrc", "")
+	b.add(".bashrc", "banana")
+	b.write("lichen/files/bashrc", "§ zsh/common\n")
+	b.sync()
+	a.sync()
+	return a, b
+}
+
+func TestInsertsSyncBothWays(t *testing.T) {
+	a, b := zshDevices(t)
+	for _, d := range []*device{a, b} {
+		expect(t, d, ".zshrc", "top\nc1\nc2\nend\n")
+	}
+	expect(t, b, ".bashrc", "c1\nc2\n")
+
+	// An edit to inserted lines goes back to the source they came from,
+	// and so to everything that inserts it.
+	a.write(".zshrc", "top\nC1\nc2\nend\n")
+	a.sync()
+	expect(t, a, "lichen/files/zsh/common", "C1\nc2\n")
+	expect(t, a, "lichen/files/zshrc", "top\n§ zsh/common\nend\n")
+	b.sync()
+	expect(t, b, ".zshrc", "top\nC1\nc2\nend\n")
+	expect(t, b, ".bashrc", "C1\nc2\n")
+
+	// Two outputs on one device: the other follows in the same pass.
+	b.write(".bashrc", "C1\nc1.5\nc2\n")
+	b.sync()
+	expect(t, b, ".zshrc", "top\nC1\nc1.5\nc2\nend\n")
+}
+
+func TestInsertsByDevice(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write(".zshrc", "")
+	a.add(".zshrc")
+	a.write("lichen/files/zshrc", "§ zsh/apple if apple\nshared\n§ zsh/others if banana, cherry\n")
+	a.write("lichen/files/zsh/apple", "apple only\n")
+	a.write("lichen/files/zsh/others", "not apple\n")
+	a.sync()
+	b := newDevice(t, remote, "banana")
+	expect(t, a, ".zshrc", "apple only\nshared\n")
+	expect(t, b, ".zshrc", "shared\nnot apple\n")
+
+	// Lines inserted on banana only are edited from banana, and what
+	// apple doesn't insert stays as it is there.
+	b.write(".zshrc", "SHARED\nNOT APPLE\n")
+	b.sync()
+	a.sync()
+	expect(t, a, ".zshrc", "apple only\nSHARED\n")
+	expect(t, a, "lichen/files/zsh/others", "NOT APPLE\n")
+}
+
+// New lines between an insert and the file around it could belong to
+// either: the output holds them until resolve says which.
+func TestAmbiguousLinesWaitForResolve(t *testing.T) {
+	a, b := zshDevices(t)
+	a.write(".zshrc", "top\nc1\nc2\nnew\nend\n")
+	a.sync()
+	expect(t, a, ".zshrc", "top\nc1\nc2\nnew\nend\n")
+	expect(t, a, "lichen/files/zshrc", "top\n§ zsh/common\nend\n")
+	expect(t, a, "lichen/files/zsh/common", "c1\nc2\n")
+	a.use()
+	if h := files.Holds(); len(h) != 1 || !strings.Contains(h[0].Why, "which source") {
+		t.Fatalf("holds = %v, want a question", h)
+	}
+	pd, err := files.Inspect(a.env(), a.path(".zshrc"), nil)
+	if qs := pd.Questions; err != nil || pd.Conflict != "" || len(qs) != 1 || !slices.Equal(qs[0].Lines, []string{"new"}) || !slices.Equal(qs[0].Sources, []string{"zsh/common", "zshrc"}) {
+		t.Fatalf("inspect = %+v, %v", pd, err)
+	}
+
+	// Held: a change from elsewhere waits too.
+	b.write(".zshrc", "TOP\nc1\nc2\nend\n")
+	b.sync()
+	a.sync()
+	expect(t, a, ".zshrc", "top\nc1\nc2\nnew\nend\n")
+
+	a.change(func(env *core.Env) error { return files.Resolve(env, a.path(".zshrc"), "", []string{"zsh/common"}) })
+	expect(t, a, "lichen/files/zsh/common", "c1\nc2\nnew\n")
+	expect(t, a, ".zshrc", "TOP\nc1\nc2\nnew\nend\n")
+	if h := files.Holds(); len(h) != 0 {
+		t.Fatalf("holds = %v after resolving", h)
+	}
+	b.sync()
+	expect(t, b, ".bashrc", "c1\nc2\nnew\n")
+}
+
+func TestInsertConflict(t *testing.T) {
+	a, b := zshDevices(t)
+	a.write(".zshrc", "top\napple\nc2\nend\n")
+	a.sync()
+	b.write(".bashrc", "banana\nc2\n")
+	b.write(".zshrc", "top\nc1\nc2\nend, from banana\n")
+	b.sync()
+	expect(t, b, ".bashrc", "banana\nc2\n")
+	b.use()
+	if h := files.Holds(); len(h) != 1 || !strings.Contains(h[0].Why, "same place") {
+		t.Fatalf("holds = %v, want a conflict at ~/.bashrc", h)
+	}
+	// The edit that merges went through, and with it apple's edit.
+	expect(t, b, ".zshrc", "top\napple\nc2\nend, from banana\n")
+
+	// Keeping here wins where they clash.
+	b.change(func(env *core.Env) error { return files.Resolve(env, b.path(".bashrc"), "here", nil) })
+	a.sync()
+	expect(t, a, ".zshrc", "top\nbanana\nc2\nend, from banana\n")
+}
+
+// Deleting an output deletes its own source, not what it inserts.
+func TestDeletingAnOutputKeepsItsInserts(t *testing.T) {
+	a, b := zshDevices(t)
+	os.Remove(a.path(".zshrc"))
+	a.sync()
+	b.sync()
+	if b.has(".zshrc") {
+		t.Fatal("~/.zshrc is still on banana")
+	}
+	expect(t, b, ".bashrc", "c1\nc2\n")
+	expect(t, b, "lichen/files/zsh/common", "c1\nc2\n")
+}
+
+// A file whose lines start with § syncs as it is.
+func TestLiteralMarks(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write("notes.md", "§ 1 Scope\n§§ odd\n")
+	a.add("notes.md")
+	b := newDevice(t, remote, "banana")
+	expect(t, b, "notes.md", "§ 1 Scope\n§§ odd\n")
+	b.write("notes.md", "§ 1 Scope\n§ 2 Terms\n§§ odd\n")
+	b.sync()
+	a.sync()
+	expect(t, a, "notes.md", "§ 1 Scope\n§ 2 Terms\n§§ odd\n")
+}
+
+// A broken insert leaves the output alone until it is fixed.
+func TestBrokenInsertHoldsTheOutput(t *testing.T) {
+	a, _ := zshDevices(t)
+	a.write("lichen/files/zshrc", "top\n§ zsh/missing\nend\n")
+	a.sync()
+	expect(t, a, ".zshrc", "top\nc1\nc2\nend\n")
+	a.write("lichen/files/zshrc", "top\n§ zsh/common\n")
+	a.sync()
+	expect(t, a, ".zshrc", "top\nc1\nc2\n")
+}
+
+// An edit beats a deletion made elsewhere at the same time, inserts and
+// all: the file comes back as it was, with the edit in its sources.
+func TestEditBeatsDeletionWithInserts(t *testing.T) {
+	a, b := zshDevices(t)
+	os.Remove(a.path(".zshrc"))
+	a.sync()
+	b.write(".zshrc", "top\nC1\nc2\nend, edited\n")
+	b.sync()
+	expect(t, b, "lichen/files/zshrc", "top\n§ zsh/common\nend, edited\n")
+	expect(t, b, "lichen/files/zsh/common", "C1\nc2\n")
+	b.sync() // what else inserts it follows on the next pass
+	expect(t, b, ".bashrc", "C1\nc2\n")
+	a.sync()
+	expect(t, a, ".zshrc", "top\nC1\nc2\nend, edited\n")
+}
+
+// An output that is no longer text, from a source that inserts others
+// (on some device), is a conflict: taking it would lose the inserts.
+func TestBinaryOverInsertsIsAConflict(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write(".zshrc", "")
+	a.add(".zshrc")
+	a.write("lichen/files/zshrc", "top\n§ zsh/banana if banana\n")
+	a.sync()
+	a.write(".zshrc", "\x00binary")
+	a.sync()
+	expect(t, a, "lichen/files/zshrc", "top\n§ zsh/banana if banana\n")
+	a.use()
+	if h := files.Holds(); len(h) != 1 || !strings.Contains(h[0].Why, "isn't text") {
+		t.Fatalf("holds = %v, want a conflict", h)
+	}
+}
+
+// An edit beats the deletion of a whole directory, including the files of
+// it the edited one inserts.
+func TestEditBeatsDeletionOfWhatItInserts(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write(".config/zsh/main", "")
+	a.write(".config/zsh/part", "p1\n")
+	os.Chmod(a.path(".config/zsh/part"), 0o755)
+	a.add(".config/zsh")
+	a.write("lichen/files/config/zsh/main", "m1\n§ config/zsh/part\n")
+	a.sync()
+	b := newDevice(t, remote, "banana")
+	expect(t, b, ".config/zsh/main", "m1\np1\n")
+
+	os.RemoveAll(a.path(".config/zsh"))
+	a.sync()
+	b.write(".config/zsh/main", "m1\nP1\n")
+	b.sync()
+	expect(t, b, "lichen/files/config/zsh/main", "m1\n§ config/zsh/part\n")
+	expect(t, b, "lichen/files/config/zsh/part", "P1\n")
+	b.sync()
+	if fi, _ := os.Stat(b.path(".config/zsh/part")); fi.Mode().Perm()&0o100 == 0 {
+		t.Fatal("~/.config/zsh/part lost its executable bit")
+	}
+	a.sync()
+	expect(t, a, ".config/zsh/main", "m1\nP1\n")
+}
+
+// A source deleted elsewhere while the lines it inserts were edited here
+// comes back, edited, like a whole file would. Until then, the outputs
+// that insert it are broken.
+func TestEditBeatsDeletingAnInsert(t *testing.T) {
+	a, b := zshDevices(t)
+	os.Remove(b.path("lichen/files/zsh/common"))
+	b.sync()
+	expect(t, b, ".zshrc", "top\nc1\nc2\nend\n")
+	if br := files.Broken(b.env()); len(br) != 2 || !strings.Contains(br[0].Why, "no source zsh/common") {
+		t.Fatalf("broken = %v, want ~/.bashrc and ~/.zshrc", br)
+	}
+
+	a.write(".zshrc", "top\nC1\nc2\nend\n")
+	a.sync()
+	expect(t, a, "lichen/files/zsh/common", "C1\nc2\n")
+	b.sync()
+	expect(t, b, ".zshrc", "top\nC1\nc2\nend\n")
+	if br := files.Broken(b.env()); len(br) != 0 {
+		t.Fatalf("broken = %v after it came back", br)
+	}
+}
+
+// An edit to lines of an insert that is no longer inserted would be lost:
+// it waits for resolve instead.
+func TestEditToWhatIsNoLongerInserted(t *testing.T) {
+	a, b := zshDevices(t)
+	b.write("lichen/files/zshrc", "banana\nc1\nc2\nend\n")
+	b.sync()
+	// The edit to its own line clashes too, which keeping it would settle,
+	// but not the rest.
+	a.write(".zshrc", "apple\nAPPLE\nc2\nend\n")
+	a.sync()
+	expect(t, a, ".zshrc", "apple\nAPPLE\nc2\nend\n")
+	expect(t, a, "lichen/files/zsh/common", "c1\nc2\n")
+	a.use()
+	if h := files.Holds(); len(h) != 1 || !strings.Contains(h[0].Why, "no longer inserts zsh/common") {
+		t.Fatalf("holds = %v", h)
+	}
+	err := files.Resolve(a.env(), a.path(".zshrc"), "here", nil)
+	if err == nil || !strings.Contains(err.Error(), "can't be kept as it is") {
+		t.Fatalf("keep here: err = %v", err)
+	}
+}
+
+// Bringing back a file edited here while it was deleted elsewhere keeps
+// a chmod made with the edit.
+func TestEditBeatsDeletionKeepsTheMode(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write("bin/x", "v1\n")
+	a.add("bin/x")
+	b := newDevice(t, remote, "banana")
+	os.Remove(a.path("bin/x"))
+	a.sync()
+	b.write("bin/x", "v2\n")
+	os.Chmod(b.path("bin/x"), 0o755)
+	b.sync()
+	b.sync()
+	if fi, err := os.Stat(b.path("bin/x")); err != nil || fi.Mode().Perm()&0o100 == 0 {
+		t.Fatalf("~/bin/x lost its executable bit: %v, %v", fi.Mode(), err)
+	}
+	a.sync()
+	expect(t, a, "bin/x", "v2\n")
+	if fi, _ := os.Stat(a.path("bin/x")); fi.Mode().Perm()&0o100 == 0 {
+		t.Fatal("~/bin/x is not executable on apple")
+	}
+}

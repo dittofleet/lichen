@@ -41,6 +41,9 @@ type Env struct {
 	Device   Device
 	Settings Settings
 	Log      *log.Logger
+	// Notify tells the user something needs them, when that can't wait
+	// for them to look (the daemon sets it).
+	Notify func(msg string)
 }
 
 // ErrNotSetUp means this machine has no sync folder yet.
