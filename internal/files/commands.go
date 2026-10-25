@@ -97,7 +97,7 @@ func Add(env *core.Env, paths []string, name string, only []string) ([]string, e
 		if _, err := os.Lstat(sourcePath(env, n)); err == nil {
 			return nil, fmt.Errorf("%s/%s already exists: pick another name with --name", SourcesDir, n)
 		}
-		rels := []string{""}
+		rels, secret := []string{""}, private(abs)
 		if fi.IsDir() {
 			if rels = listFiles(abs); len(rels) == 0 {
 				return nil, fmt.Errorf("%s has no files to sync", p)
@@ -120,9 +120,16 @@ func Add(env *core.Env, paths []string, name string, only []string) ([]string, e
 			if err := st.remember(want{source: n, file: file, path: out, root: abs, dir: rel != ""}, content); err != nil {
 				return nil, err
 			}
+			secret = secret || private(out)
 		}
-		c.Sources[n] = Source{To: []Output{{Path: config.ContractHome(abs), Only: only}}, Private: fi.Mode().Perm()&0o077 == 0}
-		delete(dead, n)
+		c.Sources[n] = Source{To: []Output{{Path: config.ContractHome(abs), Only: only}}, Private: secret}
+		// A source deleted around this one is gone for good: it would
+		// otherwise look like it came back.
+		for d := range dead {
+			if config.Within(n, d) || config.Within(d, n) {
+				delete(dead, d)
+			}
+		}
 		added = append(added, n)
 	}
 	if err := c.save(env); err != nil {

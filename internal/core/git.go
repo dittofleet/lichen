@@ -90,19 +90,16 @@ func (e *Env) pull() error {
 // unresolved: a file edited on one side and deleted on the other. The
 // edit wins, whichever side made it (the files module then brings back
 // the source it belongs to), so an edit is never lost to a deletion, and
-// the pull never wedges on one.
+// the pull never wedges on one. Each local commit replayed may stop it
+// again.
 func (e *Env) settleRebase() error {
 	for range 100 {
 		if !e.rebasing() {
 			return nil
 		}
-		out, err := e.Git("diff", "--name-only", "-z", "--diff-filter=U")
+		unmerged, err := e.unmerged()
 		if err != nil {
 			return err
-		}
-		unmerged := split0(out)
-		if len(unmerged) == 0 {
-			return errors.New("the pull stopped on something other than a conflict")
 		}
 		for _, p := range unmerged {
 			// Mid-rebase, theirs is the local commit being replayed.
@@ -115,17 +112,25 @@ func (e *Env) settleRebase() error {
 				return err
 			}
 		}
-		if _, err := e.Git("-c", "core.editor=true", "rebase", "--continue"); err != nil {
-			// The local commit had nothing else in it.
-			if _, staged := e.Git("diff", "--cached", "--quiet"); staged != nil {
-				return err
-			}
-			if _, err := e.Git("rebase", "--skip"); err != nil && e.rebasing() {
+		if _, staged := e.Git("diff", "--cached", "--quiet"); staged == nil {
+			// Nothing is left of the local commit.
+			_, err = e.Git("rebase", "--skip")
+		} else {
+			_, err = e.Git("-c", "core.editor=true", "rebase", "--continue")
+		}
+		// Stopping on the next commit's conflict is for the next round.
+		if err != nil && e.rebasing() {
+			if next, _ := e.unmerged(); len(next) == 0 {
 				return err
 			}
 		}
 	}
 	return errors.New("the pull would not settle")
+}
+
+func (e *Env) unmerged() ([]string, error) {
+	out, err := e.Git("diff", "--name-only", "-z", "--diff-filter=U")
+	return split0(out), err
 }
 
 func split0(s string) []string {

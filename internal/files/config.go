@@ -45,8 +45,8 @@ type Output struct {
 // Source is one entry of files.json, keyed by its path under files/.
 type Source struct {
 	To []Output `json:"to"`
-	// Private sources were added with no access for anyone but their
-	// owner (~/.netrc, say), and new outputs are written that way.
+	// Private sources hold a file no one but its owner may read
+	// (~/.netrc, say), and new outputs are written that way.
 	Private bool `json:"private,omitempty"`
 }
 

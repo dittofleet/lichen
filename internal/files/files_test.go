@@ -465,6 +465,26 @@ func TestExecutableBitSyncs(t *testing.T) {
 	b.sync()
 	executable(a, true)
 	executable(b, true)
+
+	// A chmod on one device and an edit on the other both stick.
+	a.write("bin/hello", "#!/bin/sh\necho hello\n")
+	a.sync()
+	os.Chmod(b.path("bin/hello"), 0o644)
+	b.sync()
+	a.sync()
+	for _, d := range []*device{a, b} {
+		expect(t, d, "bin/hello", "#!/bin/sh\necho hello\n")
+		executable(d, false)
+	}
+	os.Chmod(a.path("bin/hello"), 0o755)
+	a.sync()
+	b.write("bin/hello", "#!/bin/sh\necho hey\n")
+	b.sync()
+	a.sync()
+	for _, d := range []*device{a, b} {
+		expect(t, d, "bin/hello", "#!/bin/sh\necho hey\n")
+		executable(d, true)
+	}
 }
 
 func TestSymlinksAreLeftAlone(t *testing.T) {
@@ -650,8 +670,20 @@ func TestPrivateFilesStayPrivate(t *testing.T) {
 	a.write(".netrc", "machine example.com password hunter2\n")
 	os.Chmod(a.path(".netrc"), 0o600)
 	a.add(".netrc")
+	// One private file in an open directory, there from the start or
+	// added later, keeps it out of sight too.
+	a.write(".config/gh/hosts.yml", "token: x\n")
+	os.Chmod(a.path(".config/gh/hosts.yml"), 0o600)
+	a.add(".config/gh")
+	a.write(".config/tea/config.yml", "x\n")
+	a.add(".config/tea")
+	a.write(".config/tea/token", "y\n")
+	os.Chmod(a.path(".config/tea/token"), 0o600)
+	a.sync()
 	b := newDevice(t, remote, "banana")
-	for path, want := range map[string]os.FileMode{b.path(".netrc"): 0o600, b.path("lichen"): 0o700} {
+	for path, want := range map[string]os.FileMode{
+		b.path(".netrc"): 0o600, b.path(".config/gh/hosts.yml"): 0o600, b.path(".config/tea/token"): 0o600, b.path("lichen"): 0o700,
+	} {
 		if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != want {
 			t.Errorf("%s: mode %v, want %v (%v)", path, fi.Mode().Perm(), want, err)
 		}
@@ -690,6 +722,85 @@ func TestChangeOverAnUncommittedEdit(t *testing.T) {
 	})
 	expect(t, b, ".zshrc", "edited in the sync folder\n")
 	expect(t, b, ".vimrc", "v\n")
+}
+
+// An edit made while the source is deleted elsewhere keeps the source,
+// and with it whatever else changed about it: removing it later leaves
+// its files in place, as removing any source does.
+func TestSourceKeptOverADeletionStaysRemovable(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write(".zshrc", "v1\n")
+	a.add(".zshrc")
+	b := newDevice(t, remote, "banana")
+
+	os.Rename(remote, remote+".away")
+	b.write(".zshrc", "edited on banana\n")
+	b.change(func(env *core.Env) error { return files.AddOutput(env, "zshrc", "~/.zshrc.local", nil) })
+	os.Rename(remote+".away", remote)
+	os.Remove(a.path(".zshrc"))
+	a.sync()
+	b.sync()
+	a.sync()
+	expect(t, a, ".zshrc", "edited on banana\n")
+	expect(t, a, ".zshrc.local", "edited on banana\n")
+
+	a.change(func(env *core.Env) error {
+		_, err := files.Remove(env, []string{"zshrc"})
+		return err
+	})
+	b.sync()
+	for _, d := range []*device{a, b} {
+		expect(t, d, ".zshrc", "edited on banana\n")
+		expect(t, d, ".zshrc.local", "edited on banana\n")
+	}
+}
+
+// Several offline commits, each racing a deletion, all settle.
+func TestSeveralOfflineCommitsRacingDeletions(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write(".zshrc", "z\n")
+	a.write(".vimrc", "v\n")
+	a.add(".zshrc")
+	a.add(".vimrc")
+	b := newDevice(t, remote, "banana")
+
+	os.Rename(remote, remote+".away")
+	b.write(".zshrc", "z, banana\n")
+	b.sync()
+	b.write(".vimrc", "v, banana\n")
+	b.sync()
+	os.Rename(remote+".away", remote)
+	os.Remove(a.path(".zshrc"))
+	os.Remove(a.path(".vimrc"))
+	a.sync()
+	b.sync()
+	a.sync()
+	for _, d := range []*device{a, b} {
+		expect(t, d, ".zshrc", "z, banana\n")
+		expect(t, d, ".vimrc", "v, banana\n")
+	}
+}
+
+// A new source where a deleted one was doesn't bring the old one back.
+func TestAddingInsideADeletedSource(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write(".config/tool/one", "1")
+	a.add(".config/tool")
+	os.RemoveAll(a.path(".config/tool"))
+	a.sync()
+	a.write(".config/tool/new", "n")
+	a.add(".config/tool/new")
+	a.sync()
+	entries, err := files.List(a.env())
+	if err != nil || len(entries) != 1 || entries[0].Name != "config/tool/new" {
+		t.Fatalf("sources = %v (%v), want just config/tool/new", entries, err)
+	}
+	if a.has(".config/tool/one") {
+		t.Fatal("the deleted source came back")
+	}
 }
 
 // What sits behind a symlink is not lichen's to judge: a file missing

@@ -57,6 +57,9 @@ func (p *pass) reconcile() error {
 	if err := p.captureNew(ws, dirs); err != nil {
 		return err
 	}
+	if err := p.syncModes(ws); err != nil {
+		return err
+	}
 	if err := p.capture(ws); err != nil {
 		return err
 	}
@@ -101,28 +104,28 @@ func (p *pass) commit() error {
 	return p.env.Commit(subject, body)
 }
 
-// revive brings back a deleted source whose files came back: edited on
-// one device while deleted on another, which the sync repo's merge
-// settles in the edit's favour.
+// revive settles a deleted source that was changed elsewhere at the
+// same time, which the sync repo's merge keeps alongside the deletion:
+// a source whose files came back returns, and a live entry beats its
+// tombstone.
 func (p *pass) revive() error {
 	dead, err := loadDeleted(p.env)
 	if err != nil {
 		return err
 	}
-	revived := false
+	settled := false
 	for _, name := range slices.Sorted(maps.Keys(dead)) {
-		if _, ok := p.cfg.Sources[name]; ok {
-			continue
+		if _, ok := p.cfg.Sources[name]; !ok {
+			if _, err := os.Stat(sourcePath(p.env, name)); err != nil {
+				continue
+			}
+			p.cfg.Sources[name] = dead[name]
 		}
-		if _, err := os.Stat(sourcePath(p.env, name)); err != nil {
-			continue
-		}
-		p.cfg.Sources[name] = dead[name]
 		delete(dead, name)
-		revived = true
-		p.note("bring back " + name + ", edited while it was deleted")
+		settled = true
+		p.note("keep " + name + ", changed while it was deleted")
 	}
-	if !revived {
+	if !settled {
 		return nil
 	}
 	if err := p.cfg.save(p.env); err != nil {
@@ -178,6 +181,13 @@ func (p *pass) captureNew(ws map[string]want, dirs map[string]string) error {
 			}
 			if err := p.st.remember(w, content); err != nil {
 				return err
+			}
+			if s := p.cfg.Sources[source]; !s.Private && private(out) {
+				s.Private = true
+				p.cfg.Sources[source] = s
+				if err := p.cfg.save(p.env); err != nil {
+					return err
+				}
 			}
 			ws[out] = w
 			p.note("add " + config.ContractHome(out))
@@ -316,9 +326,6 @@ func (p *pass) reconcileExisting(w want, rec *record, live, src []byte) (bool, e
 	out := w.path
 	switch {
 	case bytes.Equal(live, src):
-		if err := p.syncExec(w, rec); err != nil {
-			return true, err
-		}
 		return true, p.st.remember(w, src)
 	case rec == nil:
 		// A file this device had before it synced this one: the synced
@@ -356,19 +363,32 @@ func (p *pass) reconcileExisting(w want, rec *record, live, src []byte) (bool, e
 	return true, p.st.remember(w, merged)
 }
 
-// syncExec carries a change of the executable bit alone, whichever side
-// made it.
-func (p *pass) syncExec(w want, rec *record) error {
-	src := sourcePath(p.env, w.file)
-	here := isExec(w.path)
-	if here == isExec(src) {
-		return nil
+// syncModes carries a change of the executable bit, whichever side made
+// it, ahead of the content, so neither side's content change undoes the
+// other's chmod.
+func (p *pass) syncModes(ws map[string]want) error {
+	for _, out := range slices.Sorted(maps.Keys(ws)) {
+		w, rec := ws[out], p.st.Outputs[out]
+		src := sourcePath(p.env, w.file)
+		if rec == nil || !regular(out) || !regular(src) || underSymlink(p.home, out) {
+			continue
+		}
+		here := isExec(out)
+		if here == isExec(src) {
+			continue
+		}
+		var err error
+		if here != rec.Exec {
+			p.note("chmod " + config.ContractHome(out))
+			err = setExec(src, here)
+		} else {
+			err = setExec(out, !here)
+		}
+		if err != nil {
+			return err
+		}
 	}
-	if rec != nil && here != rec.Exec {
-		p.note("chmod " + config.ContractHome(w.path))
-		return setExec(src, here)
-	}
-	return setExec(w.path, !here)
+	return nil
 }
 
 // release handles outputs lichen wrote here that are no longer meant for
@@ -460,6 +480,12 @@ func (p *pass) release(ws map[string]want, dirs map[string]string) error {
 		}
 	}
 	return nil
+}
+
+// private reports whether no one but the owner may read path.
+func private(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.Mode().Perm()&0o077 == 0
 }
 
 func regular(path string) bool {
