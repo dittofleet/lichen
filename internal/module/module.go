@@ -33,7 +33,7 @@ type Module interface {
 var All = []Module{files.Module{}, skills.Module{}, mcp.Module{}}
 
 // Pass runs every module. With pull it first brings in what other devices
-// pushed (a nudge, the hourly pass, a CLI command); without it, the sync
+// pushed (a nudge, the hourly pass, a CLI command). Without it, the sync
 // folder is as current as it gets already. An outdated build stops the
 // pass before anything is applied or pushed. Callers hold the
 // cross-process lock.
@@ -60,8 +60,8 @@ func Pass(env *core.Env, pull bool) error {
 
 // Local is the pass for a change on this device, in the sync folder or
 // at one of the files module's outputs, which are all the daemon
-// watches. The files module runs; the others only when their config was
-// edited by hand, as they sync nothing local.
+// watches. The files module runs, and the others only when their config
+// was edited by hand, as they sync nothing local.
 func Local(env *core.Env) error {
 	if err := env.Gate(); err != nil {
 		return err

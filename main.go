@@ -1,7 +1,7 @@
 // lichen keeps your devices in sync, one module per kind of thing: files
 // (sources in the sync folder, written wherever each device needs them),
 // agent skills installed from public repos, and MCP servers. One daemon
-// per device; edits propagate within seconds via crosstalk.
+// runs per device, and edits propagate within seconds via crosstalk.
 package main
 
 import (

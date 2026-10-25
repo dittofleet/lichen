@@ -821,7 +821,8 @@ func TestNothingThroughSymlinks(t *testing.T) {
 	b.sync()
 	expect(t, b, ".config/tool/one", "1")
 
-	// banana's .config moves out of home, linked back; apple deletes one.
+	// banana's .config moves out of home, linked back, and apple deletes
+	// one.
 	outside := t.TempDir()
 	os.Rename(b.path(".config"), filepath.Join(outside, "config"))
 	os.Symlink(filepath.Join(outside, "config"), b.path(".config"))
