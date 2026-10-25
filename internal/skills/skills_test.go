@@ -335,4 +335,10 @@ func TestRun(t *testing.T) {
 	if got := Configured()[0].Only; !slices.Equal(got, []string{"linux", "lychee"}) {
 		t.Errorf("scope after re-adding = %v", got)
 	}
+
+	// An entry this build can't parse holds removals back, but not one
+	// for other devices.
+	writeConfig(`{"sources":[{"repo":"me/skills","only":["linux"]},{"repo":"not a spec","only":["linux"]}],"harnesses":["~/.claude/skills","~/.codex/skills"]}`)
+	pass()
+	expect(filepath.Join(agents, "both"), false)
 }

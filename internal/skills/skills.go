@@ -658,13 +658,15 @@ func run(env *core.Env, force bool) error {
 	// the whole pass rather than uninstalling what it covers.
 	skipRemovals := false
 	for _, src := range sources {
+		// What a source for other devices covers goes from this one,
+		// whatever it is.
+		if !env.Device.In(src.Only) {
+			continue
+		}
 		key, url, err := parseSpec(src.Repo)
 		if err != nil {
 			skipRemovals = true
 			lg.Printf("skills: %v", err)
-			continue
-		}
-		if !env.Device.In(src.Only) {
 			continue
 		}
 		sel := selections[key]

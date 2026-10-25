@@ -133,17 +133,10 @@ func cmdSkillsList() error {
 	for _, s := range installed {
 		width = max(width, len(s.Name))
 	}
-	scopes := map[string][]string{}
-	for _, src := range configured {
-		scopes[src.Repo] = src.Only
-	}
 	fromRepo := map[string]bool{}
 	for _, s := range installed {
 		fromRepo[s.Repo] = true
 		repo := s.Repo
-		if len(scopes[s.Repo]) > 0 {
-			repo += " on " + core.Describe(scopes[s.Repo])
-		}
 		if len(s.OnlyFor) > 0 {
 			repo += " (" + strings.Join(s.OnlyFor, ", ") + " only)"
 		}
