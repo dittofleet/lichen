@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"lichen/internal/core"
 )
 
 func TestParseSpec(t *testing.T) {
@@ -177,10 +179,11 @@ func TestDiscoverRootSkill(t *testing.T) {
 	}
 }
 
-// TestRunOnlyFor drives full passes against a scratch home: a limited
-// skill lives in the private store and is linked only into its harness,
-// and changing lichen-harnesses moves it between stores.
-func TestRunOnlyFor(t *testing.T) {
+// TestRun drives full passes against a scratch home: a limited skill
+// lives in the private store and is linked only into its harness,
+// changing lichen-harnesses moves it between stores, and a repo scoped
+// away from a device leaves it.
+func TestRun(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("LICHEN_DIR", "")
@@ -225,7 +228,8 @@ func TestRunOnlyFor(t *testing.T) {
 	writeConfig(`{"sources":[{"repo":"me/skills"}],"harnesses":["~/.claude/skills","~/.codex/skills"]}`)
 	pass := func() {
 		t.Helper()
-		if err := Update(log.New(io.Discard, "", 0)); err != nil {
+		env := &core.Env{Log: log.New(io.Discard, "", 0), Device: core.Device{Name: "lychee", Groups: []string{"lychee", "mac"}}}
+		if err := Update(env); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -305,4 +309,36 @@ func TestRunOnlyFor(t *testing.T) {
 	expect(filepath.Join(private, "only"), false)
 	expect(filepath.Join(codex, "only"), false)
 	expect(filepath.Join(agents, "both"), true)
+
+	// A repo for other devices is uninstalled here, clone and all, and
+	// comes back when this device is in again.
+	if err := Only("me/skills", []string{"linux"}); err != nil {
+		t.Fatal(err)
+	}
+	pass()
+	expect(filepath.Join(agents, "both"), false)
+	expect(filepath.Join(claude, "both"), false)
+	expect(filepath.Join(clones, cloneDirName("github.com/me/skills")), false)
+	git(home, "clone", "-q", upstream, filepath.Join(clones, cloneDirName("github.com/me/skills")))
+	if err := Only("me/skills", []string{"linux", "lychee"}); err != nil {
+		t.Fatal(err)
+	}
+	pass()
+	expect(filepath.Join(agents, "both"), true)
+	if !linksTo(filepath.Join(claude, "both"), filepath.Join(agents, "both")) {
+		t.Error("claude link missing after scoping back in")
+	}
+	// Adding more of the repo keeps its scope.
+	if _, err := AddSource("me/skills", []string{"only"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := Configured()[0].Only; !slices.Equal(got, []string{"linux", "lychee"}) {
+		t.Errorf("scope after re-adding = %v", got)
+	}
+
+	// An entry this build can't parse holds removals back, but not one
+	// for other devices.
+	writeConfig(`{"sources":[{"repo":"me/skills","only":["linux"]},{"repo":"not a spec","only":["linux"]}],"harnesses":["~/.claude/skills","~/.codex/skills"]}`)
+	pass()
+	expect(filepath.Join(agents, "both"), false)
 }

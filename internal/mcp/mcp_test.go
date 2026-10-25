@@ -7,6 +7,8 @@ import (
 	"os"
 	"slices"
 	"testing"
+
+	"lichen/internal/core"
 )
 
 // fake is an in-memory harness that records the calls it gets.
@@ -81,10 +83,10 @@ func TestReconcile(t *testing.T) {
 	claude := &fake{id: "claude", servers: map[string]Server{"mine": {Command: "own"}}}
 	codex := &fake{id: "codex", servers: map[string]Server{}}
 	harnesses = []harness{claude, codex}
-	lg := log.New(io.Discard, "", 0)
+	env := &core.Env{Log: log.New(io.Discard, "", 0), Device: core.Device{Name: "lychee", Groups: []string{"lychee", "mac"}}}
 	reconcile := func() {
 		t.Helper()
-		if err := Reconcile(lg); err != nil {
+		if err := Reconcile(env); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -140,6 +142,27 @@ func TestReconcile(t *testing.T) {
 		t.Errorf("codex pw = %+v, want %+v", codex.servers["pw"], pw)
 	}
 
+	// A server for other devices is removed here, and comes back when
+	// this device is in again. A scope change alone reinstalls nothing.
+	if err := Only("pw", []string{"linux"}); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	expect(claude, "remove pw")
+	expect(codex, "remove pw")
+	if err := Only("pw", []string{"mac"}); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	expect(claude, "add pw")
+	expect(codex, "add pw")
+	if err := Only("pw", []string{"lychee"}); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	expect(claude)
+	expect(codex)
+
 	// A harness that is missing on this machine is skipped, and what
 	// lichen installed there earlier is left as is.
 	codex.missing = true
@@ -169,7 +192,7 @@ func TestReconcile(t *testing.T) {
 	if err := os.WriteFile(p, []byte("null\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Reconcile(lg); err == nil {
+	if err := Reconcile(env); err == nil {
 		t.Error("null mcp.json: expected an error")
 	}
 	expect(claude)

@@ -212,11 +212,6 @@ func Remove(env *core.Env, args []string) ([]string, error) {
 // Only scopes outputs to devices and groups: one output by its path, or
 // every output of a source by its name. No groups is every device.
 func Only(env *core.Env, target string, groups []string) error {
-	for _, g := range groups {
-		if err := core.ValidGroup(g); err != nil {
-			return err
-		}
-	}
 	c, err := loadConfig(env)
 	if err != nil {
 		return err

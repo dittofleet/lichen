@@ -109,16 +109,21 @@ func usage() {
   lichen files resolve <path> --keep here|synced
                                    settle a file edited on two devices at once
 
-  lichen skills add <repo> [--skill <name>]...
+  lichen skills add <repo> [--skill <name>]... [--only <groups>]
                                    sync agent skills from a public repo
   lichen skills remove <repo|skill...>
                                    stop syncing skills (uninstalls them)
+  lichen skills only <repo> [<group>...]
+                                   choose the devices a repo's skills are for
   lichen skills list               show every synced skill
   lichen skills update             check skill repos for updates now
 
-  lichen mcp add <name> <command> [args...]
-  lichen mcp add <name> <url>      install an MCP server in every harness
+  lichen mcp add <name> [--only <groups>] <command> [args...]
+  lichen mcp add <name> [--only <groups>] <url>
+                                   install an MCP server in every harness
   lichen mcp remove <name...>      stop syncing MCP servers (uninstalls them)
+  lichen mcp only <name> [<group>...]
+                                   choose the devices a server is for
   lichen mcp list                  show every synced MCP server
 
   lichen devices                   show your devices and their groups
@@ -173,6 +178,26 @@ func change(subject string, edit func(env *core.Env) error) error {
 	return withEnv(func(env *core.Env) error {
 		return module.Change(env, subject, func() error { return edit(env) })
 	})
+}
+
+// cmdOnly scopes something to devices and groups, through change.
+func cmdOnly(what string, groups []string, scope func(env *core.Env) error) error {
+	for _, g := range groups {
+		if err := core.ValidGroup(g); err != nil {
+			return err
+		}
+	}
+	msg := fmt.Sprintf("%s goes to %s", what, core.Describe(groups))
+	if err := change(msg, scope); err != nil {
+		return err
+	}
+	fmt.Println(msg)
+	return nil
+}
+
+// notHere shows a listed thing that is for other devices.
+func notHere(line string, only []string) string {
+	return dim(fmt.Sprintf("%s  (%s, not this device)", line, core.Describe(only)))
 }
 
 // updateAndRerun installs the release the sync folder requires, restarts

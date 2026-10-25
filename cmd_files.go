@@ -35,12 +35,7 @@ func cmdFiles(args []string) error {
 			return errors.New("usage: lichen files only <source|path> [<group>...]")
 		}
 		target, groups := args[1], args[2:]
-		msg := fmt.Sprintf("%s goes to %s", targets(target), core.Describe(groups))
-		if err := change(msg, func(env *core.Env) error { return files.Only(env, target, groups) }); err != nil {
-			return err
-		}
-		fmt.Println(msg)
-		return nil
+		return cmdOnly(targets(target), groups, func(env *core.Env) error { return files.Only(env, target, groups) })
 	case "recover":
 		if len(args) < 2 {
 			return errors.New("usage: lichen files recover <source|path>...")
@@ -161,7 +156,7 @@ func cmdFilesList() error {
 			line := fmt.Sprintf("%-*s  %s", width, name, o.Path)
 			switch {
 			case !env.Device.In(o.Only):
-				line = dim(fmt.Sprintf("%s  (%s, not this device)", line, core.Describe(o.Only)))
+				line = notHere(line, o.Only)
 			case len(o.Only) > 0:
 				line += "  " + dim("("+core.Describe(o.Only)+")")
 			}
