@@ -874,6 +874,24 @@ func TestTwoDevicesJoinAnEmptyRepo(t *testing.T) {
 	expect(t, b, ".zshrc", "from apple\n")
 }
 
+// A repo whose HEAD names a branch nobody pushed clones with nothing
+// checked out.
+func TestJoiningARepoWhoseHeadWasNeverPushed(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write(".zshrc", "from apple\n")
+	a.add(".zshrc")
+	if out, err := exec.Command("git", "-C", remote, "symbolic-ref", "HEAD", "refs/heads/trunk").CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	b := newDevice(t, remote, "banana")
+	expect(t, b, ".zshrc", "from apple\n")
+	b.write(".zshrc", "from banana\n")
+	b.sync()
+	a.sync()
+	expect(t, a, ".zshrc", "from banana\n")
+}
+
 func TestOfflineEditsDoNotWedge(t *testing.T) {
 	remote := newRemote(t)
 	a := newDevice(t, remote, "apple")

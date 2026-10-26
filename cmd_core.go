@@ -119,6 +119,9 @@ func cmdStatus() error {
 		origin = paint("33", "no remote: not synced anywhere")
 	}
 	fmt.Printf("%s     %s %s %s\n", bold("sync:"), config.ContractHome(env.Dir), dim("→"), origin)
+	if err := env.Gate(); err != nil {
+		fmt.Printf("          %s\n", paint("31", err.Error()))
+	}
 	if p, err := config.LogPath(); err == nil {
 		fmt.Printf("%s      %s\n", bold("log:"), dim(config.ContractHome(p)))
 	}
@@ -137,12 +140,16 @@ func cmdStatus() error {
 	if installed, err := skills.Installed(); err == nil && len(installed) > 0 {
 		fmt.Printf("%s %d installed\n", bold("skills:"), len(installed))
 	}
-	if entries, err := mcp.List(); err == nil && len(entries) > 0 {
+	if entries, err := mcp.List(); err == nil {
 		var names []string
 		for _, e := range entries {
-			names = append(names, e.Name)
+			if len(e.Harnesses) > 0 {
+				names = append(names, e.Name)
+			}
 		}
-		fmt.Printf("%s %s\n", bold("mcp:"), strings.Join(names, ", "))
+		if len(names) > 0 {
+			fmt.Printf("%s %s\n", bold("mcp:"), strings.Join(names, ", "))
+		}
 	}
 	if broken := files.Broken(env); len(broken) > 0 {
 		fmt.Printf("\n%s not synced until their sources compile:\n", paint("31", "broken:"))

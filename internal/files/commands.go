@@ -3,6 +3,7 @@ package files
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path"
@@ -33,6 +34,18 @@ func owner(c *fileConfig, abs string) (name string, out Output, ok bool) {
 		}
 	}
 	return "", Output{}, false
+}
+
+// claimed refuses a new output at abs that overlaps one already syncing.
+func claimed(c *fileConfig, abs string) error {
+	n, o, ok := owner(c, abs)
+	if !ok {
+		return nil
+	}
+	if root, _ := o.root(); root != abs && config.Within(root, abs) {
+		return fmt.Errorf("%s holds %s, which already syncs", config.ContractHome(abs), config.ContractHome(root))
+	}
+	return fmt.Errorf("%s already syncs, through %s", config.ContractHome(abs), n)
 }
 
 // outputAt finds the output at p exactly.
@@ -73,14 +86,17 @@ func Add(env *core.Env, paths []string, name string, only []string) ([]string, e
 			return nil, err
 		}
 		fi, err := os.Lstat(abs)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("%s doesn't exist", config.ContractHome(abs))
+		}
 		if err != nil {
 			return nil, err
 		}
 		if fi.Mode()&os.ModeSymlink != 0 {
 			return nil, fmt.Errorf("%s is a symlink: sync what it points at instead", p)
 		}
-		if n, _, ok := owner(c, abs); ok {
-			return nil, fmt.Errorf("%s already syncs, through %s", config.ContractHome(abs), n)
+		if err := claimed(c, abs); err != nil {
+			return nil, err
 		}
 		n := name
 		if n == "" {
@@ -156,8 +172,8 @@ func AddOutput(env *core.Env, source, p string, only []string) error {
 	if err != nil {
 		return err
 	}
-	if n, _, ok := owner(c, abs); ok {
-		return fmt.Errorf("%s already syncs, through %s", config.ContractHome(abs), n)
+	if err := claimed(c, abs); err != nil {
+		return err
 	}
 	if fi, err := os.Stat(sourcePath(env, source)); err == nil && fi.IsDir() {
 		has := listFiles(sourcePath(env, source))
@@ -417,7 +433,7 @@ func held(p string) (abs string, st *state, rec *record, live []byte, err error)
 		return
 	}
 	if rec = st.Outputs[abs]; rec == nil || rec.Held == "" {
-		err = fmt.Errorf("%s: %w", p, ErrNotHeld)
+		err = fmt.Errorf("%s: %w", config.ContractHome(abs), ErrNotHeld)
 		return
 	}
 	live, err = os.ReadFile(abs)
@@ -451,7 +467,15 @@ func List(env *core.Env) ([]Entry, error) {
 	for _, n := range slices.Sorted(maps.Keys(c.Sources)) {
 		p := sourcePath(env, n)
 		fi, err := os.Stat(p)
-		entries = append(entries, Entry{Name: n, Path: p, Dir: err == nil && fi.IsDir(), Private: c.Sources[n].Private, Outputs: c.Sources[n].To})
+		var outs []Output
+		for _, o := range c.Sources[n].To {
+			// Spelled the way issues are, however files.json has it.
+			if root, err := o.root(); err == nil {
+				o.Path = config.ContractHome(root)
+			}
+			outs = append(outs, o)
+		}
+		entries = append(entries, Entry{Name: n, Path: p, Dir: err == nil && fi.IsDir(), Private: c.Sources[n].Private, Outputs: outs})
 	}
 	return entries, nil
 }

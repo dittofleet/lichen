@@ -199,13 +199,11 @@ func filesJSON(env *core.Env, entries []files.Entry) []sourceJSON {
 	for _, e := range entries {
 		s := sourceJSON{Name: e.Name, Path: config.ContractHome(e.Path), Dir: e.Dir, Private: e.Private, Outputs: []outputJSON{}}
 		for _, o := range e.Outputs {
-			// As the issues have it, however files.json spells it.
-			abs, _ := config.Abs(o.Path)
 			s.Outputs = append(s.Outputs, outputJSON{
 				Path:   o.Path,
 				Only:   append([]string{}, o.Only...),
 				Here:   env.Device.In(o.Only),
-				Issues: append([]issueJSON{}, issues[config.ContractHome(abs)]...),
+				Issues: append([]issueJSON{}, issues[o.Path]...),
 			})
 		}
 		out = append(out, s)

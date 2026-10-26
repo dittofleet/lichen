@@ -272,6 +272,10 @@ func Setup(url string) (string, error) {
 	} else if _, err := gitutil.Run(filepath.Dir(dir), "clone", "--quiet", url, dir); err != nil {
 		return dir, err
 	}
+	if err := onBranch(dir); err != nil {
+		os.RemoveAll(dir)
+		return dir, err
+	}
 	// Synced files may be private ones (~/.netrc, say): the folder is
 	// this user's alone, whatever modes they arrive with.
 	if err := os.Chmod(dir, 0o700); err != nil {
@@ -289,4 +293,24 @@ func Setup(url string) (string, error) {
 		return dir, err
 	}
 	return dir, config.WriteFile(filepath.Join(dir, ".gitignore"), []byte(config.GitIgnore), 0o644)
+}
+
+// syncBranch is the sync branch. Left to git, each machine would name its
+// first commit's branch after its own settings, or after a HEAD the
+// repo's host made up (`git init --bare` says master), and two devices
+// that disagreed would sync two separate histories.
+const syncBranch = "main"
+
+// onBranch puts a sync folder with no commits yet on the sync branch:
+// the one another device pushed, or a new one for the first commit.
+func onBranch(dir string) error {
+	if _, err := gitutil.Run(dir, "rev-parse", "--verify", "--quiet", "HEAD"); err == nil {
+		return nil
+	}
+	if _, err := gitutil.Run(dir, "rev-parse", "--verify", "--quiet", "origin/"+syncBranch); err == nil {
+		_, err = gitutil.Run(dir, "checkout", "--quiet", "-b", syncBranch, "--track", "origin/"+syncBranch)
+		return err
+	}
+	_, err := gitutil.Run(dir, "symbolic-ref", "HEAD", "refs/heads/"+syncBranch)
+	return err
 }
