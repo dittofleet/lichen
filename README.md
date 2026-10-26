@@ -243,17 +243,6 @@ lichen mcp only playwright mac servers   # change it later
 
 Servers that need API keys, headers or a login aren't supported.
 
-## Mac app
-
-A window onto the files module: every source, where it goes and on which
-devices, and what needs attention. It runs the `lichen` CLI for
-everything, so it needs lichen installed. To build it and copy it to
-`/Applications` (needs Xcode or its command line tools):
-
-```sh
-make -C mac install
-```
-
 ## Updates
 
 lichen updates itself: at most once a day, after a command, it installs a
