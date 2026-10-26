@@ -300,7 +300,7 @@ func TestConcurrentEditsMerge(t *testing.T) {
 	expect(t, a, ".zshrc", "one\n2\nthree\n")
 }
 
-// A held file in a synced directory has the directory as its output.
+// A conflict inside a synced directory holds that file.
 func TestHoldInADirectory(t *testing.T) {
 	remote := newRemote(t)
 	a := newDevice(t, remote, "apple")
@@ -313,8 +313,8 @@ func TestHoldInADirectory(t *testing.T) {
 	b.write(".claude/commands/one.md", "banana\n")
 	b.sync()
 	b.use()
-	if h := files.Holds(); len(h) != 1 || !strings.HasSuffix(h[0].Path, ".claude/commands/one.md") || !strings.HasSuffix(h[0].Root, ".claude/commands") {
-		t.Fatalf("holds = %v, want ~/.claude/commands/one.md in ~/.claude/commands", h)
+	if h := files.Holds(); len(h) != 1 || !strings.HasSuffix(h[0].Path, ".claude/commands/one.md") {
+		t.Fatalf("holds = %v, want ~/.claude/commands/one.md", h)
 	}
 }
 

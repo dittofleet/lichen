@@ -171,11 +171,7 @@ func cmdStatus() error {
 	return nil
 }
 
-func cmdDevices(args []string) error {
-	asJSON, err := jsonFlag(args)
-	if err != nil {
-		return err
-	}
+func cmdDevices() error {
 	env, err := core.Load(clilog())
 	if err != nil {
 		return err
@@ -183,9 +179,7 @@ func cmdDevices(args []string) error {
 	devices, err := events.Devices()
 	if err != nil {
 		devices = []events.Device{{Name: env.Device.Name, Online: true, Self: true}}
-		if !asJSON {
-			fmt.Println(dim("(crosstalk is not running: only this device and the ones in your groups are known)"))
-		}
+		fmt.Println(dim("(crosstalk is not running: only this device and the ones in your groups are known)"))
 	}
 	// Devices named in groups count too, known to crosstalk or not.
 	known := len(devices)
@@ -195,16 +189,6 @@ func cmdDevices(args []string) error {
 				devices = append(devices, events.Device{Name: name})
 			}
 		}
-	}
-	if asJSON {
-		groups := env.Settings.Groups
-		if groups == nil {
-			groups = map[string][]string{}
-		}
-		return printJSON(struct {
-			Devices []events.Device     `json:"devices"`
-			Groups  map[string][]string `json:"groups"`
-		}{devices, groups})
 	}
 	width := 0
 	for _, d := range devices {

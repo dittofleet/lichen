@@ -11,8 +11,8 @@ import (
 )
 
 func cmdFiles(args []string) error {
-	if len(args) == 0 || args[0] == "--json" {
-		return cmdFilesList(args)
+	if len(args) == 0 {
+		return cmdFilesList()
 	}
 	switch args[0] {
 	case "add":
@@ -50,7 +50,7 @@ func cmdFiles(args []string) error {
 		fmt.Printf("recovered %s\n", strings.Join(recovered, ", "))
 		return nil
 	case "list", "ls":
-		return cmdFilesList(args[1:])
+		return cmdFilesList()
 	}
 	return errors.New("usage: lichen files [add|remove|only|recover]")
 }
@@ -115,11 +115,7 @@ func cmdFilesAdd(args []string) error {
 	return nil
 }
 
-func cmdFilesList(args []string) error {
-	asJSON, err := jsonFlag(args)
-	if err != nil {
-		return err
-	}
+func cmdFilesList() error {
 	env, err := core.Load(clilog())
 	if err != nil {
 		return err
@@ -127,9 +123,6 @@ func cmdFilesList(args []string) error {
 	entries, err := files.List(env)
 	if err != nil {
 		return err
-	}
-	if asJSON {
-		return printJSON(filesJSON(env, entries))
 	}
 	if len(entries) == 0 {
 		fmt.Println("no files synced (lichen files add <path>)")
@@ -159,54 +152,4 @@ func cmdFilesList(args []string) error {
 		}
 	}
 	return nil
-}
-
-type sourceJSON struct {
-	Name    string       `json:"name"`
-	Path    string       `json:"path"` // in the sync folder
-	Dir     bool         `json:"dir"`
-	Private bool         `json:"private"`
-	Outputs []outputJSON `json:"outputs"`
-}
-
-type outputJSON struct {
-	Path   string      `json:"path"`
-	Only   []string    `json:"only"`
-	Here   bool        `json:"here"`
-	Issues []issueJSON `json:"issues"`
-}
-
-// issueJSON is a file at an output that needs the user.
-type issueJSON struct {
-	Path string `json:"path"`
-	Why  string `json:"why"`
-	// Kind is "held", for an edit waiting on lichen resolve, or "broken",
-	// for sources that don't compile.
-	Kind string `json:"kind"`
-}
-
-// filesJSON is lichen files --json: every source, where it goes, and
-// what about it needs attention on this device.
-func filesJSON(env *core.Env, entries []files.Entry) []sourceJSON {
-	issues := map[string][]issueJSON{} // by output
-	for _, h := range files.Holds() {
-		issues[h.Root] = append(issues[h.Root], issueJSON{h.Path, h.Why, "held"})
-	}
-	for _, b := range files.Broken(env) {
-		issues[b.Root] = append(issues[b.Root], issueJSON{b.Path, b.Why, "broken"})
-	}
-	out := []sourceJSON{}
-	for _, e := range entries {
-		s := sourceJSON{Name: e.Name, Path: config.ContractHome(e.Path), Dir: e.Dir, Private: e.Private, Outputs: []outputJSON{}}
-		for _, o := range e.Outputs {
-			s.Outputs = append(s.Outputs, outputJSON{
-				Path:   o.Path,
-				Only:   append([]string{}, o.Only...),
-				Here:   env.Device.In(o.Only),
-				Issues: append([]issueJSON{}, issues[o.Path]...),
-			})
-		}
-		out = append(out, s)
-	}
-	return out
 }
