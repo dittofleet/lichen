@@ -295,11 +295,11 @@ func Setup(url string) (string, error) {
 	return dir, config.WriteFile(filepath.Join(dir, ".gitignore"), []byte(config.GitIgnore), 0o644)
 }
 
-// branch is the sync branch. Left to git, each machine would name its
+// syncBranch is the sync branch. Left to git, each machine would name its
 // first commit's branch after its own settings, or after a HEAD the
 // repo's host made up (`git init --bare` says master), and two devices
 // that disagreed would sync two separate histories.
-const branch = "main"
+const syncBranch = "main"
 
 // onBranch puts a sync folder with no commits yet on the sync branch:
 // the one another device pushed, or a new one for the first commit.
@@ -307,10 +307,10 @@ func onBranch(dir string) error {
 	if _, err := gitutil.Run(dir, "rev-parse", "--verify", "--quiet", "HEAD"); err == nil {
 		return nil
 	}
-	if _, err := gitutil.Run(dir, "rev-parse", "--verify", "--quiet", "origin/"+branch); err == nil {
-		_, err = gitutil.Run(dir, "checkout", "--quiet", branch)
+	if _, err := gitutil.Run(dir, "rev-parse", "--verify", "--quiet", "origin/"+syncBranch); err == nil {
+		_, err = gitutil.Run(dir, "checkout", "--quiet", "-b", syncBranch, "--track", "origin/"+syncBranch)
 		return err
 	}
-	_, err := gitutil.Run(dir, "symbolic-ref", "HEAD", "refs/heads/"+branch)
+	_, err := gitutil.Run(dir, "symbolic-ref", "HEAD", "refs/heads/"+syncBranch)
 	return err
 }

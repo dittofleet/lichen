@@ -338,11 +338,13 @@ func TestRun(t *testing.T) {
 		t.Errorf("scope after re-adding = %v", got)
 	}
 	// A skill the repo doesn't have is refused, and nothing is saved.
+	cfg, _ := ConfigPath()
+	before, _ := os.ReadFile(cfg)
 	if _, err := AddSource("me/skills", []string{"typo"}, nil, quiet); err == nil || !strings.Contains(err.Error(), "it has both, only") {
 		t.Errorf("adding a missing skill: %v", err)
 	}
-	if got := Configured()[0].Skills; slices.Contains(got, "typo") {
-		t.Errorf("missing skill saved: %v", got)
+	if after, _ := os.ReadFile(cfg); string(after) != string(before) {
+		t.Errorf("refused adds changed the config:\n%s", after)
 	}
 
 	// An entry this build can't parse holds removals back, but not one

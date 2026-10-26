@@ -467,7 +467,15 @@ func List(env *core.Env) ([]Entry, error) {
 	for _, n := range slices.Sorted(maps.Keys(c.Sources)) {
 		p := sourcePath(env, n)
 		fi, err := os.Stat(p)
-		entries = append(entries, Entry{Name: n, Path: p, Dir: err == nil && fi.IsDir(), Private: c.Sources[n].Private, Outputs: c.Sources[n].To})
+		var outs []Output
+		for _, o := range c.Sources[n].To {
+			// Spelled the way issues are, however files.json has it.
+			if root, err := o.root(); err == nil {
+				o.Path = config.ContractHome(root)
+			}
+			outs = append(outs, o)
+		}
+		entries = append(entries, Entry{Name: n, Path: p, Dir: err == nil && fi.IsDir(), Private: c.Sources[n].Private, Outputs: outs})
 	}
 	return entries, nil
 }
