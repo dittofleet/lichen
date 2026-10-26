@@ -191,7 +191,7 @@ struct OutputRow: View {
                 .fixedSize()
             }
             ForEach(output.issues, id: \.self) { issue in
-                IssueLabel(issue: issue)
+                IssueLabel(issue: issue, output: output.path)
             }
         }
         .confirmationDialog("Stop writing \(source.name) to \(output.path)?", isPresented: $removing) {
@@ -208,6 +208,7 @@ struct OutputRow: View {
 
 struct IssueLabel: View {
     let issue: Issue
+    let output: String
 
     var body: some View {
         let hint: LocalizedStringKey = switch issue.kind {
@@ -216,7 +217,8 @@ struct IssueLabel: View {
         }
         Label {
             VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: "\(issue.path): \(issue.why)")
+                // A directory's issues are about files in it, so those name the file.
+                Text(verbatim: issue.path == output ? issue.why : "\(issue.path): \(issue.why)")
                 Text(hint).foregroundStyle(.secondary)
             }
             .font(.callout)

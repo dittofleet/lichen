@@ -64,7 +64,7 @@ func cmdSkillsAdd(args []string) error {
 	var src skills.Source
 	var here bool
 	err := change("skills: add "+repo, func(env *core.Env) (err error) {
-		src, err = skills.AddSource(repo, names, only)
+		src, err = skills.AddSource(repo, names, only, env.Log)
 		here = env.Device.In(src.Only)
 		return err
 	})

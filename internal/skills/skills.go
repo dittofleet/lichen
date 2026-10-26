@@ -831,9 +831,11 @@ func run(env *core.Env, force bool) error {
 // skill source, saves the skills config, and returns the source as saved,
 // under its canonical key. Install happens on the next reconcile, which
 // the CLI runs immediately after. A nil only leaves an existing source's
-// devices as they were.
-func AddSource(spec string, names, only []string) (Source, error) {
-	key, _, err := parseSpec(spec)
+// devices as they were. A repo without the skills named, or without any,
+// is refused before anything is saved: every device would otherwise go
+// on failing to install them.
+func AddSource(spec string, names, only []string, lg *log.Logger) (Source, error) {
+	key, url, err := parseSpec(spec)
 	if err != nil {
 		return Source{}, err
 	}
@@ -847,6 +849,9 @@ func AddSource(spec string, names, only []string) (Source, error) {
 			// serializes away and reads back as "every skill".
 			return Source{}, fmt.Errorf("invalid skill name %q", raw)
 		}
+	}
+	if err := hasSkills(key, url, names, lg); err != nil {
+		return Source{}, err
 	}
 	slices.Sort(names)
 	names = slices.Compact(names)
@@ -877,6 +882,31 @@ func AddSource(spec string, names, only []string) (Source, error) {
 	}
 	sources = append(sources, Source{Repo: key, Skills: names, Only: only})
 	return sources[len(sources)-1], saveSources(sources)
+}
+
+// hasSkills fetches a repo and checks it has the skills named, or any.
+func hasSkills(key, url string, names []string, lg *log.Logger) error {
+	man, err := loadManifest()
+	if err != nil {
+		return err
+	}
+	dir, err := ensureClone(key, url, man, true, lg)
+	if err != nil {
+		return err
+	}
+	if err := man.save(); err != nil {
+		return err
+	}
+	found := discover(dir, repoName(key))
+	if len(found) == 0 {
+		return fmt.Errorf("%s has no skills", key)
+	}
+	for _, name := range names {
+		if _, ok := found[name]; !ok {
+			return fmt.Errorf("%s has no skill %q (it has %s)", key, name, strings.Join(slices.Sorted(maps.Keys(found)), ", "))
+		}
+	}
+	return nil
 }
 
 // Only limits a repo's skills to some devices and groups. No groups is

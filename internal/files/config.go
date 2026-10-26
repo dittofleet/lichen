@@ -165,7 +165,10 @@ func checkOutput(env *core.Env, abs string) error {
 	if err != nil {
 		return err
 	}
-	if abs == home || !config.Within(abs, home) {
+	if abs == home {
+		return errors.New("your home directory can't sync as a whole, only what's in it")
+	}
+	if !config.Within(abs, home) {
 		return fmt.Errorf("%s is not inside your home directory: only files under ~ can sync", abs)
 	}
 	data, _ := config.DataDir()

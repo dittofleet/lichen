@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"lichen/internal/core"
@@ -329,11 +330,18 @@ func TestRun(t *testing.T) {
 		t.Error("claude link missing after scoping back in")
 	}
 	// Adding more of the repo keeps its scope.
-	if _, err := AddSource("me/skills", []string{"only"}, nil); err != nil {
+	if _, err := AddSource("me/skills", []string{"only"}, nil, log.New(io.Discard, "", 0)); err != nil {
 		t.Fatal(err)
 	}
 	if got := Configured()[0].Only; !slices.Equal(got, []string{"linux", "lychee"}) {
 		t.Errorf("scope after re-adding = %v", got)
+	}
+	// A skill the repo doesn't have is refused, and nothing is saved.
+	if _, err := AddSource("me/skills", []string{"typo"}, nil, log.New(io.Discard, "", 0)); err == nil || !strings.Contains(err.Error(), "it has both, only") {
+		t.Errorf("adding a missing skill: %v", err)
+	}
+	if got := Configured()[0].Skills; slices.Contains(got, "typo") {
+		t.Errorf("missing skill saved: %v", got)
 	}
 
 	// An entry this build can't parse holds removals back, but not one

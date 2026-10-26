@@ -3,6 +3,7 @@ package files
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path"
@@ -33,6 +34,14 @@ func owner(c *fileConfig, abs string) (name string, out Output, ok bool) {
 		}
 	}
 	return "", Output{}, false
+}
+
+// syncing refuses a new output at abs that overlaps o, source name's.
+func syncing(abs, name string, o Output) error {
+	if root, _ := o.root(); root != abs && config.Within(root, abs) {
+		return fmt.Errorf("%s holds %s, which already syncs", config.ContractHome(abs), o.Path)
+	}
+	return fmt.Errorf("%s already syncs, through %s", config.ContractHome(abs), name)
 }
 
 // outputAt finds the output at p exactly.
@@ -73,14 +82,17 @@ func Add(env *core.Env, paths []string, name string, only []string) ([]string, e
 			return nil, err
 		}
 		fi, err := os.Lstat(abs)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("%s doesn't exist", config.ContractHome(abs))
+		}
 		if err != nil {
 			return nil, err
 		}
 		if fi.Mode()&os.ModeSymlink != 0 {
 			return nil, fmt.Errorf("%s is a symlink: sync what it points at instead", p)
 		}
-		if n, _, ok := owner(c, abs); ok {
-			return nil, fmt.Errorf("%s already syncs, through %s", config.ContractHome(abs), n)
+		if n, o, ok := owner(c, abs); ok {
+			return nil, syncing(abs, n, o)
 		}
 		n := name
 		if n == "" {
@@ -156,8 +168,8 @@ func AddOutput(env *core.Env, source, p string, only []string) error {
 	if err != nil {
 		return err
 	}
-	if n, _, ok := owner(c, abs); ok {
-		return fmt.Errorf("%s already syncs, through %s", config.ContractHome(abs), n)
+	if n, o, ok := owner(c, abs); ok {
+		return syncing(abs, n, o)
 	}
 	if fi, err := os.Stat(sourcePath(env, source)); err == nil && fi.IsDir() {
 		has := listFiles(sourcePath(env, source))
@@ -417,7 +429,7 @@ func held(p string) (abs string, st *state, rec *record, live []byte, err error)
 		return
 	}
 	if rec = st.Outputs[abs]; rec == nil || rec.Held == "" {
-		err = fmt.Errorf("%s: %w", p, ErrNotHeld)
+		err = fmt.Errorf("%s: %w", config.ContractHome(abs), ErrNotHeld)
 		return
 	}
 	live, err = os.ReadFile(abs)
