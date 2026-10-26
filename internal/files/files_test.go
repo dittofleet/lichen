@@ -874,8 +874,8 @@ func TestTwoDevicesJoinAnEmptyRepo(t *testing.T) {
 	expect(t, b, ".zshrc", "from apple\n")
 }
 
-// A bare repo made with `git init --bare` names master as its HEAD, and a
-// first device that pushes main leaves that branch unborn.
+// A repo whose HEAD names a branch nobody pushed clones with nothing
+// checked out.
 func TestJoiningARepoWhoseHeadWasNeverPushed(t *testing.T) {
 	remote := newRemote(t)
 	a := newDevice(t, remote, "apple")

@@ -227,9 +227,10 @@ func TestRun(t *testing.T) {
 		}
 	}
 	writeConfig(`{"sources":[{"repo":"me/skills"}],"harnesses":["~/.claude/skills","~/.codex/skills"]}`)
+	quiet := log.New(io.Discard, "", 0)
 	pass := func() {
 		t.Helper()
-		env := &core.Env{Log: log.New(io.Discard, "", 0), Device: core.Device{Name: "lychee", Groups: []string{"lychee", "mac"}}}
+		env := &core.Env{Log: quiet, Device: core.Device{Name: "lychee", Groups: []string{"lychee", "mac"}}}
 		if err := Update(env); err != nil {
 			t.Fatal(err)
 		}
@@ -330,14 +331,14 @@ func TestRun(t *testing.T) {
 		t.Error("claude link missing after scoping back in")
 	}
 	// Adding more of the repo keeps its scope.
-	if _, err := AddSource("me/skills", []string{"only"}, nil, log.New(io.Discard, "", 0)); err != nil {
+	if _, err := AddSource("me/skills", []string{"only"}, nil, quiet); err != nil {
 		t.Fatal(err)
 	}
 	if got := Configured()[0].Only; !slices.Equal(got, []string{"linux", "lychee"}) {
 		t.Errorf("scope after re-adding = %v", got)
 	}
 	// A skill the repo doesn't have is refused, and nothing is saved.
-	if _, err := AddSource("me/skills", []string{"typo"}, nil, log.New(io.Discard, "", 0)); err == nil || !strings.Contains(err.Error(), "it has both, only") {
+	if _, err := AddSource("me/skills", []string{"typo"}, nil, quiet); err == nil || !strings.Contains(err.Error(), "it has both, only") {
 		t.Errorf("adding a missing skill: %v", err)
 	}
 	if got := Configured()[0].Skills; slices.Contains(got, "typo") {

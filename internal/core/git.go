@@ -271,7 +271,8 @@ func Setup(url string) (string, error) {
 		}
 	} else if _, err := gitutil.Run(filepath.Dir(dir), "clone", "--quiet", url, dir); err != nil {
 		return dir, err
-	} else if err := checkoutPushed(dir); err != nil {
+	}
+	if err := onBranch(dir); err != nil {
 		os.RemoveAll(dir)
 		return dir, err
 	}
@@ -294,25 +295,22 @@ func Setup(url string) (string, error) {
 	return dir, config.WriteFile(filepath.Join(dir, ".gitignore"), []byte(config.GitIgnore), 0o644)
 }
 
-// checkoutPushed checks out the sync repo's branch when the clone left
-// none. A repo whose HEAD names a branch nobody pushed (`git init --bare`
-// says master, and the first device pushed main) clones as if empty, and
-// syncing from there would start a second history beside the first.
-func checkoutPushed(dir string) error {
+// branch is the sync branch. Left to git, each machine would name its
+// first commit's branch after its own settings, or after a HEAD the
+// repo's host made up (`git init --bare` says master), and two devices
+// that disagreed would sync two separate histories.
+const branch = "main"
+
+// onBranch puts a sync folder with no commits yet on the sync branch:
+// the one another device pushed, or a new one for the first commit.
+func onBranch(dir string) error {
 	if _, err := gitutil.Run(dir, "rev-parse", "--verify", "--quiet", "HEAD"); err == nil {
 		return nil
 	}
-	out, err := gitutil.Run(dir, "for-each-ref", "--format=%(refname:lstrip=3)", "refs/remotes/origin")
-	if err != nil {
+	if _, err := gitutil.Run(dir, "rev-parse", "--verify", "--quiet", "origin/"+branch); err == nil {
+		_, err = gitutil.Run(dir, "checkout", "--quiet", branch)
 		return err
 	}
-	switch branches := strings.Fields(out); len(branches) {
-	case 0:
-		return nil
-	case 1:
-		_, err := gitutil.Run(dir, "checkout", "--quiet", branches[0])
-		return err
-	default:
-		return fmt.Errorf("the sync repo's HEAD names a branch nobody pushed, and it has several (%s): point HEAD at the one to sync", strings.Join(branches, ", "))
-	}
+	_, err := gitutil.Run(dir, "symbolic-ref", "HEAD", "refs/heads/"+branch)
+	return err
 }
