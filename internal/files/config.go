@@ -65,7 +65,8 @@ func loadConfig(env *core.Env) (*fileConfig, error) {
 	var old struct {
 		Sources map[string]legacySource `json:"sources"`
 	}
-	legacy, err := config.LegacyJSON(env.Path("files.json"), env.Path(ConfigFile), &old)
+	// lichen 1.0's files.json, until a pass converts it.
+	legacy, err := config.ReadJSON(env.Path("files.json"), &old)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +130,7 @@ func Convert(env *core.Env) error {
 
 // legacySource is a source as lichen 1.0 wrote it, in files.json and the
 // record of deleted sources: scoped with only, which is include. Remove
-// with config.LegacyJSON.
+// with config.ConvertJSON.
 type legacySource struct {
 	To []struct {
 		Output

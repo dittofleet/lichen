@@ -94,7 +94,7 @@ func loadConfig() (cfg *skillsConfig, exists bool, err error) {
 		return nil, false, err
 	}
 	cfg = &skillsConfig{}
-	// lichen 1.0's skills.json, scoped with only, which is include.
+	// lichen 1.0's skills.json, until a pass converts it. Its only is include.
 	var old struct {
 		Sources []struct {
 			Repo   string   `json:"repo"`
@@ -103,7 +103,7 @@ func loadConfig() (cfg *skillsConfig, exists bool, err error) {
 		} `json:"sources"`
 		Harnesses []string `json:"harnesses"`
 	}
-	if exists, err = config.LegacyJSON(legacyPath(), p, &old); err != nil || exists {
+	if exists, err = config.ReadJSON(legacyPath(), &old); err != nil || exists {
 		cfg.Harnesses = old.Harnesses
 		for _, s := range old.Sources {
 			cfg.Sources = append(cfg.Sources, Source{Repo: s.Repo, Skills: s.Skills, Scope: core.Scope{Include: s.Only}})

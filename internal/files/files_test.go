@@ -385,11 +385,34 @@ include = ["mac"]
 		}
 	}
 
-	// A TOML config wins over a JSON one beside it.
+	// A JSON config beside a TOML one is a newer edit from an older
+	// build: it wins.
 	a.write("lichen/files.json", `{"sources": {"other": {"to": [{"path": "~/.other"}]}}}`)
 	a.sync()
-	if b, _ := os.ReadFile(a.path("lichen/files.toml")); strings.Contains(string(b), "other") || a.has("lichen/files.json") {
+	if b, _ := os.ReadFile(a.path("lichen/files.toml")); string(b) != "[\"~/.other\"]\n" || a.has("lichen/files.json") {
 		t.Errorf("files.json beside files.toml:\n%s", b)
+	}
+}
+
+// Until its JSON configs are converted, which takes a pull, a device
+// changes nothing in the sync folder.
+func TestNoChangesBeforeConversion(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write("lichen/lichen.json", `{"groups": {"fruit": ["apple"]}}`)
+	if out, err := exec.Command("git", "-C", a.path("lichen"), "remote", "set-url", "origin", filepath.Join(t.TempDir(), "gone.git")).CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	env := a.env()
+	err := module.Change(env, "test", func() error { return env.EditGroup(true, "fruit", []string{"banana"}) })
+	if err == nil || !strings.Contains(err.Error(), "converts its configs") {
+		t.Fatalf("offline edit before conversion: %v", err)
+	}
+	if err := module.Local(a.env()); err == nil {
+		t.Fatal("local pass before conversion: no error")
+	}
+	if b, _ := os.ReadFile(a.path("lichen/lichen.toml")); strings.Contains(string(b), "banana") {
+		t.Fatal("the edit was saved")
 	}
 }
 

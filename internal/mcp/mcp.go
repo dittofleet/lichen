@@ -100,14 +100,14 @@ func loadConfig() (cfg *mcpConfig, exists bool, err error) {
 		return nil, false, err
 	}
 	cfg = &mcpConfig{Servers: map[string]Server{}}
-	// lichen 1.0's mcp.json, scoped with only, which is include.
+	// lichen 1.0's mcp.json, until a pass converts it. Its only is include.
 	var old struct {
 		Servers map[string]struct {
 			Server
 			Only []string `json:"only"`
 		} `json:"servers"`
 	}
-	if exists, err = config.LegacyJSON(legacyPath(), p, &old); err != nil || exists {
+	if exists, err = config.ReadJSON(legacyPath(), &old); err != nil || exists {
 		for name, s := range old.Servers {
 			s.Include = s.Only
 			cfg.Servers[name] = s.Server

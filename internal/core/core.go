@@ -65,7 +65,8 @@ func Load(lg *log.Logger) (*Env, error) {
 // Reload re-reads the settings, as after a pull or an edit to them.
 func (e *Env) Reload() error {
 	var s Settings
-	legacy, err := config.LegacyJSON(e.Path("lichen.json"), e.Path(SettingsFile), &s)
+	// lichen 1.0's lichen.json, until a pass converts it.
+	legacy, err := config.ReadJSON(e.Path("lichen.json"), &s)
 	if err != nil {
 		return err
 	}
@@ -77,6 +78,15 @@ func (e *Env) Reload() error {
 	e.Settings = s
 	e.Device.Groups = append([]string{osGroup()}, s.GroupsOf(e.Device.Name)...)
 	return nil
+}
+
+// Unconverted reports whether a JSON config of lichen 1.0 is still in the
+// sync folder. It is the one in use, until a pass converts it.
+func (e *Env) Unconverted() bool {
+	return slices.ContainsFunc([]string{"lichen.json", "files.json", "skills.json", "mcp.json"}, func(f string) bool {
+		_, err := os.Stat(e.Path(f))
+		return err == nil
+	})
 }
 
 // ConvertSettings replaces lichen 1.0's lichen.json with lichen.toml.

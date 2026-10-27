@@ -80,10 +80,16 @@ func Local(env *core.Env) error {
 	return run(env, ms)
 }
 
+// errUnconverted holds back every change to the sync folder while a JSON
+// config of lichen 1.0 is in it: a change written as TOML beside it would
+// go out without the version bump, and lose to the JSON's conversion.
+var errUnconverted = errors.New("lichen converts its configs to TOML on its next sync with the sync repo: try again after it")
+
 // settle runs after a pull: it records this build's version, then
 // converts lichen 1.0's JSON configs to TOML. Both go out in the same
 // push, so older builds pause before they would read the TOML, and the
-// conversion starts from the freshest JSON.
+// conversion starts from the freshest JSON. A JSON config beside a TOML
+// one wins: it can only be a newer edit an older build pushed meanwhile.
 func settle(env *core.Env) error {
 	if err := env.RecordVersion(); err != nil {
 		return err
@@ -105,6 +111,9 @@ func settle(env *core.Env) error {
 // files error must not keep skills or MCP servers stale, so errors are
 // joined rather than short-circuiting.
 func run(env *core.Env, ms []Module) error {
+	if env.Unconverted() {
+		return errUnconverted
+	}
 	var errs []error
 	for _, m := range ms {
 		if err := m.Reconcile(env); err != nil {
@@ -148,6 +157,9 @@ func Change(env *core.Env, subject string, edit func() error) error {
 		if err := settle(env); err != nil {
 			return err
 		}
+	}
+	if env.Unconverted() {
+		return errUnconverted
 	}
 	if err := edit(); err != nil {
 		return err
