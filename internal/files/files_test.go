@@ -435,6 +435,16 @@ source = "zshrc"
 	}
 }
 
+// Every output in files.toml names its source.
+func TestOutputsNeedASource(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write("lichen/files.toml", "[\"~/.zshrc\"]\ninclude = [\"mac\"]\n")
+	if err := module.Pass(a.env(), false); err == nil || !strings.Contains(err.Error(), "~/.zshrc: source") {
+		t.Fatalf("pass = %v, want an error for the missing source", err)
+	}
+}
+
 // An edit made in the sync folder directly is committed under its path.
 func TestDirectEditsAreDescribed(t *testing.T) {
 	remote := newRemote(t)
