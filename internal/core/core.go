@@ -58,7 +58,11 @@ func Load(lg *log.Logger) (*Env, error) {
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
 		return nil, ErrNotSetUp
 	}
-	e := &Env{Dir: dir, Device: Device{Name: deviceName()}, Log: lg}
+	name, err := DeviceName()
+	if err != nil {
+		return nil, err
+	}
+	e := &Env{Dir: dir, Device: Device{Name: name}, Log: lg}
 	return e, e.Reload()
 }
 
@@ -178,45 +182,27 @@ func osGroup() string {
 	return runtime.GOOS
 }
 
-// deviceName is the name crosstalk knows this machine by, so a device is
+// DeviceName is the name crosstalk knows this machine by, so a device is
 // called the same thing everywhere. It is remembered for when crosstalk
-// is not running, and before crosstalk ever answered it is the hostname,
-// the way crosstalk derives a name from it.
-func deviceName() string {
-	cache := ""
-	if d, err := config.DataDir(); err == nil {
-		cache = filepath.Join(d, "device")
+// can't say, as while offline.
+func DeviceName() (string, error) {
+	d, err := config.DataDir()
+	if err != nil {
+		return "", err
 	}
+	cache := filepath.Join(d, "device")
 	if name, err := events.Self(); err == nil && name != "" {
-		if cache != "" {
-			if old, _ := os.ReadFile(cache); strings.TrimSpace(string(old)) != name {
-				os.MkdirAll(filepath.Dir(cache), 0o755)
-				os.WriteFile(cache, []byte(name+"\n"), 0o644)
-			}
+		if old, _ := os.ReadFile(cache); strings.TrimSpace(string(old)) != name {
+			os.MkdirAll(d, 0o755)
+			os.WriteFile(cache, []byte(name+"\n"), 0o644)
 		}
-		return name
+		return name, nil
+	} else if b, _ := os.ReadFile(cache); strings.TrimSpace(string(b)) != "" {
+		return strings.TrimSpace(string(b)), nil
+	} else if err == nil {
+		err = errors.New("crosstalk named no device")
 	}
-	if cache != "" {
-		if b, err := os.ReadFile(cache); err == nil && strings.TrimSpace(string(b)) != "" {
-			return strings.TrimSpace(string(b))
-		}
-	}
-	host, _ := os.Hostname()
-	return nameFrom(host)
-}
-
-var notNameChar = regexp.MustCompile(`[^a-z0-9]+`)
-
-func nameFrom(host string) string {
-	host, _, _ = strings.Cut(strings.ToLower(host), ".")
-	name := strings.Trim(notNameChar.ReplaceAllString(host, "-"), "-")
-	if len(name) > 32 {
-		name = strings.Trim(name[:32], "-")
-	}
-	if name == "" {
-		return "device"
-	}
-	return name
+	return "", fmt.Errorf("lichen needs crosstalk, installed and joined to your hub (https://github.com/dittofleet/crosstalk): %w", err)
 }
 
 // Describe names a scope for people: "every device", the devices and

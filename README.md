@@ -17,13 +17,16 @@ lichen is a pun on 'liken' and just how lichen behaves in general.
 
 ## Setup
 
-Prereqs on each device: git access that can clone the sync repo (SSH key
-or credentials, since the repo should be private), and
-[crosstalk](https://github.com/dittofleet/crosstalk) joined to your hub.
-lichen nudges your other devices through crosstalk after each push, so
-they pull within seconds, and names each device the way crosstalk does.
-Without it, and for pushes made outside lichen, devices catch up on an
-hourly pass.
+Each device needs:
+
+- git access that can clone the sync repo (SSH key or credentials, since
+  the repo should be private)
+- [crosstalk](https://github.com/dittofleet/crosstalk), installed and
+  joined to your hub
+
+lichen names each device the way crosstalk does, and nudges your other
+devices through it after each push, so they pull within seconds. Pushes
+made outside lichen arrive on an hourly pass.
 
 Create an empty private repo once (the sync repo, e.g. `you/lichen-sync`),
 then on every device:

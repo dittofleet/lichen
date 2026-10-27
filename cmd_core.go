@@ -43,6 +43,9 @@ func cmdSetup(args []string) error {
 // setup creates the sync folder, brings everything synced to this
 // device, and starts the daemon.
 func setup(url string) error {
+	if _, err := core.DeviceName(); err != nil {
+		return err
+	}
 	dir, err := core.Setup(url)
 	if err != nil {
 		return err
@@ -63,10 +66,6 @@ func setup(url string) error {
 		fmt.Println("This sync folder isn't synced anywhere yet: give it a remote with `git -C ~/lichen remote add origin <url>`.")
 	}
 	fmt.Println("Start syncing with `lichen files add <path> <source>`.")
-	if _, err := exec.LookPath("crosstalk"); err != nil {
-		fmt.Println("crosstalk is not installed: changes from other devices arrive hourly instead of")
-		fmt.Println("within seconds. https://github.com/dittofleet/crosstalk")
-	}
 	return nil
 }
 
