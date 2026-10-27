@@ -42,8 +42,8 @@ var help = []helpSection{
 				"Edits on either side sync. Sources can insert others with § lines (see the README).",
 			subs: []helpSub{
 				{"list", "files [list]", "List sources and their outputs", ""},
-				{"add", "files add <path>... [--name <source>] [--include|--exclude <devices,groups>]", "Sync files or directories",
-					"Sources are named after the paths, without leading dots. --name names a single path's source."},
+				{"add", "files add <path> <source> [--include|--exclude <devices,groups>]", "Sync a file or directory",
+					"The source is its name in ~/lichen/files, like shell/zshrc."},
 				{"add", "files add <path> --to <source> [--include|--exclude <devices,groups>]", "Add an output to a source", ""},
 				{"remove", "files remove <source|path>...", "Stop syncing", "Outputs stay as plain files."},
 				{"include", "files include <source|path> <device|group>...", "Limit outputs to these devices",
@@ -119,7 +119,7 @@ var help = []helpSection{
 			outro: "Names are lowercase letters, digits and dashes. mac and linux are reserved.\n\n" +
 				"Examples\n" +
 				"  lichen groups add servers hetzner-1 hetzner-2\n" +
-				"  lichen files add ~/.zshrc --exclude servers\n" +
+				"  lichen files add ~/.zshrc shell/zshrc --exclude servers\n" +
 				"  lichen mcp include playwright mac lychee",
 		},
 	}},

@@ -118,11 +118,15 @@ func (d *device) has(rel string) bool {
 	return err == nil
 }
 
+// add syncs ~/rel as the source rel names without its leading dots.
 func (d *device) add(rel string, include ...string) {
 	d.t.Helper()
+	parts := strings.Split(rel, "/")
+	for i, p := range parts {
+		parts[i] = strings.TrimLeft(p, ".")
+	}
 	d.change(func(env *core.Env) error {
-		_, err := files.Add(env, []string{"~/" + rel}, "", core.Scope{Include: include})
-		return err
+		return files.Add(env, "~/"+rel, strings.Join(parts, "/"), core.Scope{Include: include})
 	})
 }
 
@@ -414,6 +418,7 @@ func TestOutputsOutsideHomeAreIgnored(t *testing.T) {
 	outside := filepath.Join(filepath.Dir(a.home), "outside-"+filepath.Base(a.home))
 	t.Cleanup(func() { os.Remove(outside) })
 	a.write("lichen/files.toml", `["~/.zshrc"]
+source = "zshrc"
 ["~/../`+filepath.Base(outside)+`"]
 source = "zshrc"
 ["~/lichen/zshrc"]
@@ -427,6 +432,16 @@ source = "zshrc"
 		if _, err := os.Lstat(p); err == nil {
 			t.Errorf("wrote %s", p)
 		}
+	}
+}
+
+// Every output in files.toml names its source.
+func TestOutputsNeedASource(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write("lichen/files.toml", "[\"~/.zshrc\"]\ninclude = [\"mac\"]\n")
+	if err := module.Pass(a.env(), false); err == nil || !strings.Contains(err.Error(), "~/.zshrc: source") {
+		t.Fatalf("pass = %v, want an error for the missing source", err)
 	}
 }
 
@@ -669,18 +684,23 @@ func TestOverlappingAddsAreRefused(t *testing.T) {
 	a.add(".claude/commands")
 	env := a.env()
 	for _, p := range []string{"~/.claude/commands/one.md", "~/.claude", "~/lichen/files.toml"} {
-		if _, err := files.Add(env, []string{p}, "", core.Scope{}); err == nil {
+		if err := files.Add(env, p, "x", core.Scope{}); err == nil {
 			t.Errorf("adding %s: expected a refusal", p)
 		}
 	}
 
 	// Nor may one source's name sit inside another's (claude/commands
-	// here): ~/claude would be the source claude.
+	// here), or be another's, or be no name.
 	a.write("claude/notes.md", "n")
 	a.write(".claude/settings.json", "{}")
-	for p, name := range map[string]string{"~/claude": "", "~/.claude/settings.json": "claude/commands/x"} {
-		if _, err := files.Add(env, []string{p}, name, core.Scope{}); err == nil {
-			t.Errorf("adding %s as %q: expected a refusal", p, name)
+	for _, tc := range []struct{ path, name, err string }{
+		{"~/claude", "claude", "would overlap"},
+		{"~/.claude/settings.json", "claude/commands/x", "would overlap"},
+		{"~/claude/notes.md", "claude/commands", "already a source"},
+		{"~/claude/notes.md", "", "not a usable source name"},
+	} {
+		if err := files.Add(env, tc.path, tc.name, core.Scope{}); err == nil || !strings.Contains(err.Error(), tc.err) {
+			t.Errorf("adding %s as %q: %v, want an error saying %q", tc.path, tc.name, err, tc.err)
 		}
 	}
 

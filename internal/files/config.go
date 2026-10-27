@@ -55,8 +55,7 @@ type fileConfig struct {
 
 // entry is one output in files.toml, keyed by its path.
 type entry struct {
-	// Source is left out when it is the one the path names (sourceName).
-	Source string `toml:"source,omitempty"`
+	Source string `toml:"source"`
 	core.Scope
 	Private bool `toml:"private,omitempty"`
 }
@@ -73,8 +72,8 @@ func loadConfig(env *core.Env) (*fileConfig, error) {
 			return nil, fmt.Errorf("%s: %s: %w", ConfigFile, p, err)
 		}
 		n := e.Source
-		if n == "" {
-			n = sourceName(p)
+		if err := validName(n); err != nil {
+			return nil, fmt.Errorf("%s: %s: source: %w", ConfigFile, p, err)
 		}
 		s := c.Sources[n]
 		s.To = append(s.To, Output{Path: p, Scope: e.Scope})
@@ -93,11 +92,7 @@ func (c *fileConfig) entries() map[string]entry {
 	entries := map[string]entry{}
 	for n, s := range c.Sources {
 		for _, o := range s.To {
-			e := entry{Scope: o.Scope, Private: s.Private}
-			if n != sourceName(o.Path) {
-				e.Source = n
-			}
-			entries[o.Path] = e
+			entries[o.Path] = entry{Source: n, Scope: o.Scope, Private: s.Private}
 		}
 	}
 	return entries
@@ -154,19 +149,6 @@ func dropSource(env *core.Env, c *fileConfig, name string) error {
 
 func sourcePath(env *core.Env, name string) string {
 	return env.Path(SourcesDir, filepath.FromSlash(name))
-}
-
-// sourceName turns a home-relative output path into a source name:
-// leading dots dropped from every part, so ~/.claude/CLAUDE.md is
-// claude/CLAUDE.md and the sync folder shows no hidden files.
-func sourceName(contracted string) string {
-	parts := strings.Split(strings.TrimPrefix(contracted, "~/"), "/")
-	for i, p := range parts {
-		if t := strings.TrimLeft(p, "."); t != "" {
-			parts[i] = t
-		}
-	}
-	return path.Join(parts...)
 }
 
 func validName(name string) error {

@@ -55,10 +55,11 @@ The configs have one entry per output, repo or server:
 ```toml
 # files.toml
 ["~/.zshrc"]
+source = "shell/zshrc"
 include = ["mac"]
 
 ["~/.codex/AGENTS.md"]
-source = "claude/CLAUDE.md"   # only when not named after the path
+source = "agents/CLAUDE.md"
 ```
 
 Edit anything in it and lichen commits and pushes it. You never run git
@@ -70,8 +71,8 @@ Everything syncs to every device unless scoped. A scope is a list of
 devices and groups, either included or excluded:
 
 ```sh
-lichen files add ~/.zshrc --include mac,lychee
-lichen files add ~/.vimrc --exclude servers
+lichen files add ~/.zshrc shell/zshrc --include mac,lychee
+lichen files add ~/.vimrc vim/vimrc --exclude servers
 lichen files include ~/.zshrc mac   # change it later
 lichen files exclude ~/.zshrc       # every device again
 ```
@@ -92,15 +93,14 @@ lichen groups                            # list groups
 ## Files
 
 ```sh
-lichen files add ~/.zshrc ~/.claude/CLAUDE.md
+lichen files add ~/.zshrc shell/zshrc
 ```
 
-Each path becomes a source in `~/lichen/files` (`zshrc`,
-`claude/CLAUDE.md`: leading dots are dropped), with an output where it
-came from. Every device writes the outputs meant for it, and editing
-either side syncs: the output (`~/.zshrc`) or the source
-(`~/lichen/files/zshrc`). A directory syncs as a whole, including files
-added to it later.
+The path becomes the source `shell/zshrc` in `~/lichen/files`, with an
+output where it came from. Every device writes the outputs meant for it,
+and editing either side syncs: the output (`~/.zshrc`) or the source
+(`~/lichen/files/shell/zshrc`). A directory syncs as a whole, including
+files added to it later.
 
 `lichen files` shows every source and where it goes.
 
@@ -110,8 +110,8 @@ One source can have several outputs, each with its own
 [scope](#which-devices-get-what):
 
 ```sh
-lichen files add ~/.codex/AGENTS.md --to claude/CLAUDE.md
-lichen files add ~/.config/agents.md --to claude/CLAUDE.md --include linux
+lichen files add ~/.codex/AGENTS.md --to agents/CLAUDE.md
+lichen files add ~/.config/agents.md --to agents/CLAUDE.md --include linux
 ```
 
 Edit any of them and the others follow. `lichen files include` and
@@ -129,16 +129,16 @@ differently on each device. Write the pieces as files of their own in
 
 ```
 export EDITOR=vim
-§ zsh/aliases
-§ zsh/mac if mac
-§ zsh/work if lychee, servers
-§ zsh/gui unless servers
+§ shell/aliases
+§ shell/mac if mac
+§ shell/work if lychee, servers
+§ shell/gui unless servers
 ```
 
-`~/.zshrc` gets `zsh/aliases` everywhere, `zsh/mac` on Macs, `zsh/work`
-on lychee and the servers, and `zsh/gui` everywhere but the servers. A
-piece can insert others, and needs no output of its own. A line meant to
-start with `§` starts with `§§` in the source.
+`~/.zshrc` gets `shell/aliases` everywhere, `shell/mac` on Macs,
+`shell/work` on lychee and the servers, and `shell/gui` everywhere but
+the servers. A piece can insert others, and needs no output of its own.
+A line meant to start with `§` starts with `§§` in the source.
 
 Where an insert is skipped, a blank line beside it goes too if it would
 otherwise be doubled, or start or end the file.
@@ -174,7 +174,7 @@ says so (a notification, `lichen status`, the log) until you pick one.
 
 ```sh
 lichen resolve ~/.zshrc --keep here      # or --keep synced
-lichen resolve ~/.zshrc --into zsh/mac   # where its new lines go
+lichen resolve ~/.zshrc --into shell/mac   # where its new lines go
 ```
 
 ### Backups

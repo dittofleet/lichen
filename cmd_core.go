@@ -62,7 +62,7 @@ func setup(url string) error {
 	if url == "" {
 		fmt.Println("This sync folder isn't synced anywhere yet: give it a remote with `git -C ~/lichen remote add origin <url>`.")
 	}
-	fmt.Println("Start syncing with `lichen files add <path>`.")
+	fmt.Println("Start syncing with `lichen files add <path> <source>`.")
 	if _, err := exec.LookPath("crosstalk"); err != nil {
 		fmt.Println("crosstalk is not installed: changes from other devices arrive hourly instead of")
 		fmt.Println("within seconds. https://github.com/dittofleet/crosstalk")

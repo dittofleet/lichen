@@ -61,98 +61,90 @@ func outputAt(c *fileConfig, p string) (name string, out Output, err error) {
 	return n, o, nil
 }
 
-// Add starts syncing files or directories: each becomes a source, with
-// an output where it is, for the devices in scope.
-func Add(env *core.Env, paths []string, name string, scope core.Scope) ([]string, error) {
-	if name != "" && len(paths) > 1 {
-		return nil, errors.New("--name takes one path at a time")
+// Add starts syncing a file or directory as the source name, with an
+// output where it is, for the devices in scope.
+func Add(env *core.Env, p, name string, scope core.Scope) error {
+	if err := validName(name); err != nil {
+		return err
 	}
 	c, err := loadConfig(env)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	st, err := loadState()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	dead, err := loadDeleted(env)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var added []string
-	for _, p := range paths {
-		abs, err := outputPath(env, p)
+	abs, err := outputPath(env, p)
+	if err != nil {
+		return err
+	}
+	fi, err := os.Lstat(abs)
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%s doesn't exist", config.ContractHome(abs))
+	}
+	if err != nil {
+		return err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink: sync what it points at instead", p)
+	}
+	if err := claimed(c, abs); err != nil {
+		return err
+	}
+	if _, ok := c.Sources[name]; ok {
+		return fmt.Errorf("%s is already a source: pick another name, or add an output to it with --to", name)
+	}
+	// One source inside another would have its files synced twice.
+	for e := range c.Sources {
+		if config.Within(name, e) || config.Within(e, name) {
+			return fmt.Errorf("%s would overlap the source %s: pick another name", name, e)
+		}
+	}
+	if _, err := os.Lstat(sourcePath(env, name)); err == nil {
+		return fmt.Errorf("%s/%s already exists: pick another name", SourcesDir, name)
+	}
+	rels, secret := []string{""}, private(abs)
+	if fi.IsDir() {
+		if rels = listFiles(abs); len(rels) == 0 {
+			return fmt.Errorf("%s has no files to sync", p)
+		}
+	} else if !fi.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a file or directory", p)
+	}
+	for _, rel := range rels {
+		out, file := abs, name
+		if rel != "" {
+			out, file = filepath.Join(abs, filepath.FromSlash(rel)), path.Join(name, rel)
+		}
+		content, err := os.ReadFile(out)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		fi, err := os.Lstat(abs)
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("%s doesn't exist", config.ContractHome(abs))
+		if err := track(env, st, want{source: name, file: file, path: out, root: abs, dir: rel != ""}, content); err != nil {
+			return err
 		}
-		if err != nil {
-			return nil, err
+		secret = secret || private(out)
+	}
+	c.Sources[name] = Source{To: []Output{{Path: config.ContractHome(abs), Scope: scope}}, Private: secret}
+	// A source deleted around this one is gone for good: it would
+	// otherwise look like it came back.
+	for d := range dead {
+		if config.Within(name, d) || config.Within(d, name) {
+			delete(dead, d)
 		}
-		if fi.Mode()&os.ModeSymlink != 0 {
-			return nil, fmt.Errorf("%s is a symlink: sync what it points at instead", p)
-		}
-		if err := claimed(c, abs); err != nil {
-			return nil, err
-		}
-		n := name
-		if n == "" {
-			n = sourceName(config.ContractHome(abs))
-		}
-		if err := validName(n); err != nil {
-			return nil, err
-		}
-		// One source inside another would have its files synced twice.
-		for e := range c.Sources {
-			if config.Within(n, e) || config.Within(e, n) {
-				return nil, fmt.Errorf("%s would overlap the source %s: pick another name with --name", n, e)
-			}
-		}
-		if _, err := os.Lstat(sourcePath(env, n)); err == nil {
-			return nil, fmt.Errorf("%s/%s already exists: pick another name with --name", SourcesDir, n)
-		}
-		rels, secret := []string{""}, private(abs)
-		if fi.IsDir() {
-			if rels = listFiles(abs); len(rels) == 0 {
-				return nil, fmt.Errorf("%s has no files to sync", p)
-			}
-		} else if !fi.Mode().IsRegular() {
-			return nil, fmt.Errorf("%s is not a file or directory", p)
-		}
-		for _, rel := range rels {
-			out, file := abs, n
-			if rel != "" {
-				out, file = filepath.Join(abs, filepath.FromSlash(rel)), path.Join(n, rel)
-			}
-			content, err := os.ReadFile(out)
-			if err != nil {
-				return nil, err
-			}
-			if err := track(env, st, want{source: n, file: file, path: out, root: abs, dir: rel != ""}, content); err != nil {
-				return nil, err
-			}
-			secret = secret || private(out)
-		}
-		c.Sources[n] = Source{To: []Output{{Path: config.ContractHome(abs), Scope: scope}}, Private: secret}
-		// A source deleted around this one is gone for good: it would
-		// otherwise look like it came back.
-		for d := range dead {
-			if config.Within(n, d) || config.Within(d, n) {
-				delete(dead, d)
-			}
-		}
-		added = append(added, n)
 	}
 	if err := c.save(env); err != nil {
-		return nil, err
+		return err
 	}
 	if err := saveDeleted(env, dead); err != nil {
-		return nil, err
+		return err
 	}
-	return added, st.save()
+	return st.save()
 }
 
 // AddOutput gives an existing source another output. A file already

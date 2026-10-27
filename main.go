@@ -246,18 +246,14 @@ func paint(code, s string) string {
 func bold(s string) string { return paint("1", s) }
 func dim(s string) string  { return paint("2", s) }
 
-// tilde shows paths the way lichen stores them, ~/-relative: the shell
+// tilde shows a path the way lichen stores it, ~/-relative: the shell
 // has usually expanded the ~ already, and a home directory's absolute
 // path does not belong in the shared history.
-func tilde(paths ...string) string {
-	out := make([]string, len(paths))
-	for i, p := range paths {
-		out[i] = p
-		if abs, err := config.Abs(p); err == nil {
-			out[i] = config.ContractHome(abs)
-		}
+func tilde(p string) string {
+	if abs, err := config.Abs(p); err == nil {
+		return config.ContractHome(abs)
 	}
-	return strings.Join(out, " ")
+	return p
 }
 
 // targets shows arguments that are a source name or a path, as files

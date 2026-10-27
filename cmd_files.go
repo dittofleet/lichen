@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
@@ -52,18 +51,16 @@ func cmdFiles(args []string) error {
 }
 
 func cmdFilesAdd(args []string) error {
-	var paths []string
-	var name, to string
+	var pos []string
+	var to string
 	var scope core.Scope
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
-		case "--name", "--to", "--include", "--exclude":
+		case "--to", "--include", "--exclude":
 			if i++; i >= len(args) {
 				return fmt.Errorf("%s needs a value", a)
 			}
 			switch a {
-			case "--name":
-				name = args[i]
 			case "--to":
 				to = args[i]
 			default:
@@ -75,39 +72,33 @@ func cmdFilesAdd(args []string) error {
 			if strings.HasPrefix(a, "-") {
 				return fmt.Errorf("unknown flag %q", a)
 			}
-			paths = append(paths, a)
+			pos = append(pos, a)
 		}
 	}
-	switch {
-	case len(paths) == 0:
-		return usage("files", "add")
-	case to != "" && (len(paths) > 1 || name != ""):
-		return errors.New("--to takes one path, and no --name")
-	}
 	if to != "" {
-		if err := change(fmt.Sprintf("write %s to %s", to, tilde(paths[0])), func(env *core.Env) error {
-			return files.AddOutput(env, to, paths[0], scope)
+		if len(pos) != 1 {
+			return usage("files", "add")
+		}
+		if err := change(fmt.Sprintf("write %s to %s", to, tilde(pos[0])), func(env *core.Env) error {
+			return files.AddOutput(env, to, pos[0], scope)
 		}); err != nil {
 			return err
 		}
-		fmt.Printf("%s now also goes to %s, on %s\n", to, tilde(paths[0]), core.Describe(scope))
+		fmt.Printf("%s now also goes to %s, on %s\n", to, tilde(pos[0]), core.Describe(scope))
 		return nil
 	}
-	var added []string
-	if err := change("add "+tilde(paths...), func(env *core.Env) (err error) {
-		if added, err = files.Add(env, paths, name, scope); err != nil {
-			return err
-		}
-		for i := range added {
-			added[i] = config.ContractHome(env.Path(files.SourcesDir, added[i]))
-		}
-		return nil
+	if len(pos) != 2 {
+		return usage("files", "add")
+	}
+	p, name := pos[0], pos[1]
+	var at string
+	if err := change("add "+tilde(p), func(env *core.Env) error {
+		at = config.ContractHome(env.Path(files.SourcesDir, name))
+		return files.Add(env, p, name, scope)
 	}); err != nil {
 		return err
 	}
-	for i, p := range paths {
-		fmt.Printf("syncing %s on %s, from %s\n", tilde(p), core.Describe(scope), added[i])
-	}
+	fmt.Printf("syncing %s on %s, from %s\n", tilde(p), core.Describe(scope), at)
 	return nil
 }
 
@@ -121,7 +112,7 @@ func cmdFilesList() error {
 		return err
 	}
 	if len(entries) == 0 {
-		fmt.Println("no files synced (lichen files add <path>)")
+		fmt.Println("no files synced (lichen files add <path> <source>)")
 		return nil
 	}
 	width := 0
