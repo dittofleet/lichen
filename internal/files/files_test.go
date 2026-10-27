@@ -693,9 +693,14 @@ func TestOverlappingAddsAreRefused(t *testing.T) {
 	// here), or be another's, or be no name.
 	a.write("claude/notes.md", "n")
 	a.write(".claude/settings.json", "{}")
-	for p, name := range map[string]string{"~/claude": "claude", "~/.claude/settings.json": "claude/commands/x", "~/claude/notes.md": "claude/commands", "~/.vimrc": ""} {
-		if err := files.Add(env, p, name, core.Scope{}); err == nil {
-			t.Errorf("adding %s as %q: expected a refusal", p, name)
+	for _, tc := range []struct{ path, name, err string }{
+		{"~/claude", "claude", "would overlap"},
+		{"~/.claude/settings.json", "claude/commands/x", "would overlap"},
+		{"~/claude/notes.md", "claude/commands", "already a source"},
+		{"~/claude/notes.md", "", "not a usable source name"},
+	} {
+		if err := files.Add(env, tc.path, tc.name, core.Scope{}); err == nil || !strings.Contains(err.Error(), tc.err) {
+			t.Errorf("adding %s as %q: %v, want an error saying %q", tc.path, tc.name, err, tc.err)
 		}
 	}
 

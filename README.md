@@ -129,16 +129,16 @@ differently on each device. Write the pieces as files of their own in
 
 ```
 export EDITOR=vim
-§ zsh/aliases
-§ zsh/mac if mac
-§ zsh/work if lychee, servers
-§ zsh/gui unless servers
+§ shell/aliases
+§ shell/mac if mac
+§ shell/work if lychee, servers
+§ shell/gui unless servers
 ```
 
-`~/.zshrc` gets `zsh/aliases` everywhere, `zsh/mac` on Macs, `zsh/work`
-on lychee and the servers, and `zsh/gui` everywhere but the servers. A
-piece can insert others, and needs no output of its own. A line meant to
-start with `§` starts with `§§` in the source.
+`~/.zshrc` gets `shell/aliases` everywhere, `shell/mac` on Macs,
+`shell/work` on lychee and the servers, and `shell/gui` everywhere but
+the servers. A piece can insert others, and needs no output of its own.
+A line meant to start with `§` starts with `§§` in the source.
 
 Where an insert is skipped, a blank line beside it goes too if it would
 otherwise be doubled, or start or end the file.
@@ -174,7 +174,7 @@ says so (a notification, `lichen status`, the log) until you pick one.
 
 ```sh
 lichen resolve ~/.zshrc --keep here      # or --keep synced
-lichen resolve ~/.zshrc --into zsh/mac   # where its new lines go
+lichen resolve ~/.zshrc --into shell/mac   # where its new lines go
 ```
 
 ### Backups
