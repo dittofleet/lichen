@@ -96,11 +96,11 @@ lichen groups                            # list groups
 lichen files add ~/.zshrc shell/zshrc
 ```
 
-The path becomes a source in `~/lichen/files`, under the name given,
-with an output where it came from. Every device writes the outputs meant
-for it, and editing either side syncs: the output (`~/.zshrc`) or the
-source (`~/lichen/files/shell/zshrc`). A directory syncs as a whole, including files
-added to it later.
+The path becomes the source `shell/zshrc` in `~/lichen/files`, with an
+output where it came from. Every device writes the outputs meant for it,
+and editing either side syncs: the output (`~/.zshrc`) or the source
+(`~/lichen/files/shell/zshrc`). A directory syncs as a whole, including
+files added to it later.
 
 `lichen files` shows every source and where it goes.
 

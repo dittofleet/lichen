@@ -112,7 +112,7 @@ func cmdFilesList() error {
 		return err
 	}
 	if len(entries) == 0 {
-		fmt.Println("no files synced (lichen files add <path>)")
+		fmt.Println("no files synced (lichen files add <path> <source>)")
 		return nil
 	}
 	width := 0
