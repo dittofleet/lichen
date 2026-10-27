@@ -48,7 +48,7 @@ func Pass(env *core.Env, pull bool) error {
 			return err
 		}
 		if pulled {
-			if err := env.RecordVersion(); err != nil {
+			if err := settle(env); err != nil {
 				return err
 			}
 		}
@@ -61,7 +61,7 @@ func Pass(env *core.Env, pull bool) error {
 // Local is the pass for a change on this device, in the sync folder or
 // at one of the files module's outputs, which are all the daemon
 // watches. The files module runs, and the others only when their config
-// was edited by hand, or lichen.json (whose groups scope everything), as
+// was edited by hand, or lichen.toml (whose groups scope everything), as
 // they sync nothing local.
 func Local(env *core.Env) error {
 	if err := env.Gate(); err != nil {
@@ -80,10 +80,40 @@ func Local(env *core.Env) error {
 	return run(env, ms)
 }
 
+// errUnconverted holds back every change to the sync folder while a JSON
+// config of lichen 1.0 is in it: a change written as TOML beside it would
+// go out without the version bump, and lose to the JSON's conversion.
+var errUnconverted = errors.New("lichen converts its configs to TOML on its next sync with the sync repo: try again after it")
+
+// settle runs after a pull: it records this build's version, then
+// converts lichen 1.0's JSON configs to TOML. Both go out in the same
+// push, so older builds pause before they would read the TOML, and the
+// conversion starts from the freshest JSON. A JSON config beside a TOML
+// one wins: it can only be a newer edit an older build pushed meanwhile.
+func settle(env *core.Env) error {
+	if err := env.RecordVersion(); err != nil {
+		return err
+	}
+	for _, convert := range []func() error{
+		env.ConvertSettings,
+		func() error { return files.Convert(env) },
+		skills.Convert,
+		mcp.Convert,
+	} {
+		if err := convert(); err != nil {
+			return err
+		}
+	}
+	return env.Commit("convert configs to TOML", "")
+}
+
 // run reconciles modules, then pushes. Modules fail independently: a
 // files error must not keep skills or MCP servers stale, so errors are
 // joined rather than short-circuiting.
 func run(env *core.Env, ms []Module) error {
+	if env.Unconverted() {
+		return errUnconverted
+	}
 	var errs []error
 	for _, m := range ms {
 		if err := m.Reconcile(env); err != nil {
@@ -119,8 +149,17 @@ func Change(env *core.Env, subject string, edit func() error) error {
 	if _, err := CommitDirect(env); err != nil {
 		return err
 	}
-	if _, err := env.Update(); err != nil {
+	pulled, err := env.Update()
+	if err != nil {
 		return err
+	}
+	if pulled {
+		if err := settle(env); err != nil {
+			return err
+		}
+	}
+	if env.Unconverted() {
+		return errUnconverted
 	}
 	if err := edit(); err != nil {
 		return err

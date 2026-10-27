@@ -16,9 +16,10 @@ import (
 //
 //	§ zsh/aliases
 //	§ zsh/work if lychee, servers
+//	§ zsh/gui unless servers
 //
-// The first on every device, the second only on devices in one of those
-// groups. A line meant to start with § in the output starts with §§ in
+// The first on every device, the second only on lychee and the devices
+// in servers, the third everywhere else. A line meant to start with § in the output starts with §§ in
 // the source. Outputs carry no trace of either: lichen remembers where
 // each of their lines came from instead, which is how an edit to one
 // finds its way back (see unmap).
@@ -54,29 +55,41 @@ func (t text) bytes() []byte {
 func binary(b []byte) bool { return bytes.IndexByte(b, 0) >= 0 }
 
 // directive parses a line starting with § (and not §§): the source it
-// inserts, and the groups it is limited to.
-func directive(line string) (name string, groups []string, err error) {
+// inserts, and the devices it is scoped to.
+func directive(line string) (name string, scope core.Scope, err error) {
 	rest := strings.TrimPrefix(line, mark)
 	if strings.TrimLeftFunc(rest, unicode.IsSpace) == rest {
-		return "", nil, fmt.Errorf("%q: an insert is § and a source name, and a line starting with a § of its own is §§", line)
+		return "", scope, fmt.Errorf("%q: an insert is § and a source name, and a line starting with a § of its own is §§", line)
 	}
-	name, cond, limited := strings.Cut(rest, " if ")
+	name, cond, kw := rest, "", ""
+	for _, k := range []string{"if", "unless"} {
+		if n, c, ok := strings.Cut(rest, " "+k+" "); ok {
+			name, cond, kw = n, c, k
+			break
+		}
+	}
 	name = strings.TrimSpace(name)
 	if err := validName(name); err != nil {
-		return "", nil, err
+		return "", scope, err
 	}
-	if limited {
-		groups = strings.FieldsFunc(cond, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
-		if len(groups) == 0 {
-			return "", nil, fmt.Errorf("%q: `if` takes devices or groups", line)
-		}
-		for _, g := range groups {
-			if err := core.ValidGroup(g); err != nil {
-				return "", nil, err
-			}
+	if kw == "" {
+		return name, scope, nil
+	}
+	names := strings.FieldsFunc(cond, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
+	if len(names) == 0 {
+		return "", scope, fmt.Errorf("%q: `%s` takes devices or groups", line, kw)
+	}
+	for _, n := range names {
+		if err := core.ValidGroup(n); err != nil {
+			return "", scope, err
 		}
 	}
-	return name, groups, nil
+	if kw == "if" {
+		scope.Include = names
+	} else {
+		scope.Exclude = names
+	}
+	return name, scope, nil
 }
 
 // pos is a place in a source file: one of its lines, or for a gap, the
@@ -109,10 +122,10 @@ func (c *compiled) content() []byte {
 	return c.out.bytes()
 }
 
-// compile compiles file for a device in groups, reading sources through
-// read.
-func compile(file string, read func(string) ([]byte, error), groups []string) (*compiled, error) {
-	c := &compiled{file: file, deps: map[string][]byte{}, gaps: [][]pos{nil}, groups: groups}
+// compile compiles file for a device answering to names
+// (core.Device.Names), reading sources through read.
+func compile(file string, read func(string) ([]byte, error), names []string) (*compiled, error) {
+	c := &compiled{file: file, deps: map[string][]byte{}, gaps: [][]pos{nil}, groups: names}
 	top, err := read(file)
 	if err != nil {
 		return nil, err
@@ -122,7 +135,7 @@ func compile(file string, read func(string) ([]byte, error), groups []string) (*
 		c.raw = top
 		return c, nil
 	}
-	in := core.Device{Groups: groups}.In
+	in := core.Device{Groups: names}.In
 
 	var walk func(name string, inside []string) error
 	walk = func(name string, inside []string) error {
@@ -147,7 +160,7 @@ func compile(file string, read func(string) ([]byte, error), groups []string) (*
 			case strings.HasPrefix(l, mark+mark):
 				c.emit(strings.TrimPrefix(l, mark), pos{name, i})
 			case strings.HasPrefix(l, mark):
-				ins, only, err := directive(l)
+				ins, scope, err := directive(l)
 				if err != nil {
 					return fmt.Errorf("%s line %d: %w", name, i+1, err)
 				}
@@ -155,7 +168,7 @@ func compile(file string, read func(string) ([]byte, error), groups []string) (*
 				if slices.Contains(chain, ins) {
 					return fmt.Errorf("inserts go in a circle: %s", strings.Join(append(chain, ins), " > "))
 				}
-				if in(only) {
+				if in(scope) {
 					if err := walk(ins, chain); err != nil {
 						return err
 					}

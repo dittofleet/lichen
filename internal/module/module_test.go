@@ -25,7 +25,7 @@ func (r recorder) Reconcile(*core.Env) error {
 }
 
 // A local pass runs a module whose config was edited by hand, and every
-// module when lichen.json was, since its groups scope them all.
+// module when lichen.toml was, since its groups scope them all.
 func TestLocalRunsWhatAnEditConcerns(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	dir := t.TempDir()
@@ -41,7 +41,7 @@ func TestLocalRunsWhatAnEditConcerns(t *testing.T) {
 	var ran []string
 	saved := All
 	t.Cleanup(func() { All = saved })
-	All = []Module{recorder{"skills", "skills.json", &ran}, recorder{"mcp", "mcp.json", &ran}}
+	All = []Module{recorder{"skills", "skills.toml", &ran}, recorder{"mcp", "mcp.toml", &ran}}
 	env := &core.Env{Dir: dir, Device: core.Device{Name: "lychee"}, Log: log.New(io.Discard, "", 0)}
 
 	for _, c := range []struct {
@@ -49,12 +49,12 @@ func TestLocalRunsWhatAnEditConcerns(t *testing.T) {
 		want []string
 	}{
 		{"", nil},
-		{"mcp.json", []string{"mcp"}},
+		{"mcp.toml", []string{"mcp"}},
 		{core.SettingsFile, []string{"skills", "mcp"}},
 	} {
 		ran = nil
 		if c.edit != "" {
-			write(c.edit, "{\"edited\": \""+c.edit+"\"}\n")
+			write(c.edit, "edited = \""+c.edit+"\"\n")
 		}
 		if err := Local(env); err != nil {
 			t.Fatal(err)

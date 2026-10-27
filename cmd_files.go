@@ -19,7 +19,7 @@ func cmdFiles(args []string) error {
 		return cmdFilesAdd(args[1:])
 	case "remove", "rm":
 		if len(args) < 2 {
-			return errors.New("usage: lichen files remove <source|path>...")
+			return usage("files", "remove")
 		}
 		var removed []string
 		if err := change("stop syncing "+targets(args[1:]...), func(env *core.Env) (err error) {
@@ -30,15 +30,11 @@ func cmdFiles(args []string) error {
 		}
 		fmt.Printf("stopped syncing %s (the files stay where they are)\n", strings.Join(removed, ", "))
 		return nil
-	case "only":
-		if len(args) < 2 {
-			return errors.New("usage: lichen files only <source|path> [<group>...]")
-		}
-		target, groups := args[1], args[2:]
-		return cmdOnly(targets(target), groups, func(env *core.Env) error { return files.Only(env, target, groups) })
+	case "include", "exclude":
+		return cmdScope("files", args, files.SetScope)
 	case "recover":
 		if len(args) < 2 {
-			return errors.New("usage: lichen files recover <source|path>...")
+			return usage("files", "recover")
 		}
 		var recovered []string
 		if err := change("recover "+targets(args[1:]...), func(env *core.Env) (err error) {
@@ -52,15 +48,16 @@ func cmdFiles(args []string) error {
 	case "list", "ls":
 		return cmdFilesList()
 	}
-	return errors.New("usage: lichen files [add|remove|only|recover]")
+	return fmt.Errorf("unknown command %q (see: lichen help files)", args[0])
 }
 
 func cmdFilesAdd(args []string) error {
-	var paths, only []string
+	var paths []string
 	var name, to string
+	var scope core.Scope
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
-		case "--name", "--to", "--only":
+		case "--name", "--to", "--include", "--exclude":
 			if i++; i >= len(args) {
 				return fmt.Errorf("%s needs a value", a)
 			}
@@ -70,8 +67,7 @@ func cmdFilesAdd(args []string) error {
 			case "--to":
 				to = args[i]
 			default:
-				var err error
-				if only, err = groupList(args[i]); err != nil {
+				if err := scopeFlag(&scope, a, args[i]); err != nil {
 					return err
 				}
 			}
@@ -84,22 +80,22 @@ func cmdFilesAdd(args []string) error {
 	}
 	switch {
 	case len(paths) == 0:
-		return errors.New("usage: lichen files add <path>... [--name <source>] [--only <groups>]")
+		return usage("files", "add")
 	case to != "" && (len(paths) > 1 || name != ""):
 		return errors.New("--to takes one path, and no --name")
 	}
 	if to != "" {
 		if err := change(fmt.Sprintf("write %s to %s", to, tilde(paths[0])), func(env *core.Env) error {
-			return files.AddOutput(env, to, paths[0], only)
+			return files.AddOutput(env, to, paths[0], scope)
 		}); err != nil {
 			return err
 		}
-		fmt.Printf("%s now also goes to %s, on %s\n", to, tilde(paths[0]), core.Describe(only))
+		fmt.Printf("%s now also goes to %s, on %s\n", to, tilde(paths[0]), core.Describe(scope))
 		return nil
 	}
 	var added []string
 	if err := change("add "+tilde(paths...), func(env *core.Env) (err error) {
-		if added, err = files.Add(env, paths, name, only); err != nil {
+		if added, err = files.Add(env, paths, name, scope); err != nil {
 			return err
 		}
 		for i := range added {
@@ -110,7 +106,7 @@ func cmdFilesAdd(args []string) error {
 		return err
 	}
 	for i, p := range paths {
-		fmt.Printf("syncing %s on %s, from %s\n", tilde(p), core.Describe(only), added[i])
+		fmt.Printf("syncing %s on %s, from %s\n", tilde(p), core.Describe(scope), added[i])
 	}
 	return nil
 }
@@ -143,10 +139,10 @@ func cmdFilesList() error {
 			}
 			line := fmt.Sprintf("%-*s  %s", width, name, o.Path)
 			switch {
-			case !env.Device.In(o.Only):
-				line = notHere(line, o.Only)
-			case len(o.Only) > 0:
-				line += "  " + dim("("+core.Describe(o.Only)+")")
+			case !env.Device.In(o.Scope):
+				line = notHere(line, o.Scope)
+			case !o.Scope.Everywhere():
+				line += "  " + dim("("+core.Describe(o.Scope)+")")
 			}
 			fmt.Println(line)
 		}

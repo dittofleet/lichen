@@ -4,7 +4,7 @@
 // writer of its config file. A server is just a name and either a
 // command to launch or a URL to reach: no env vars, headers or auth, so
 // nothing secret ever enters the synced config. WHICH servers to install
-// lives in this module's own config file (mcp.json in the sync folder).
+// lives in this module's own config file (mcp.toml in the sync folder).
 // What this machine installed where lives in a local manifest, the
 // ownership boundary:
 // lichen only ever replaces or removes servers it added itself, so
@@ -24,7 +24,7 @@ import (
 )
 
 // ConfigFile is the module's config in the sync folder.
-const ConfigFile = "mcp.json"
+const ConfigFile = "mcp.toml"
 
 // ConfigPath is where the module's config lives.
 func ConfigPath() (string, error) { return config.SyncPath(ConfigFile) }
@@ -40,12 +40,10 @@ func (Module) Reconcile(env *core.Env) error { return Reconcile(env) }
 // Server is one MCP server: a local one lichen launches through Command
 // and Args, or a remote one reachable at URL.
 type Server struct {
-	Command string   `json:"command,omitempty"`
-	Args    []string `json:"args,omitempty"`
-	URL     string   `json:"url,omitempty"`
-	// Only limits the server to these devices and groups. Empty is every
-	// device.
-	Only []string `json:"only,omitempty"`
+	Command string   `toml:"command,omitempty" json:"command,omitempty"`
+	Args    []string `toml:"args,omitempty" json:"args,omitempty"`
+	URL     string   `toml:"url,omitempty" json:"url,omitempty"`
+	core.Scope
 }
 
 // equal reports whether two servers run the same thing, wherever they
@@ -90,7 +88,7 @@ func validate(name string, s Server) error {
 
 // mcpConfig is the synced mcp config file.
 type mcpConfig struct {
-	Servers map[string]Server `json:"servers,omitempty"`
+	Servers map[string]Server
 }
 
 // loadConfig reads the synced mcp config. The exists flag lets the
@@ -101,27 +99,55 @@ func loadConfig() (cfg *mcpConfig, exists bool, err error) {
 	if err != nil {
 		return nil, false, err
 	}
-	cfg = &mcpConfig{}
-	if exists, err = config.ReadJSON(p, cfg); err != nil {
+	cfg = &mcpConfig{Servers: map[string]Server{}}
+	// lichen 1.0's mcp.json, until a pass converts it. Its only is include.
+	var old struct {
+		Servers map[string]struct {
+			Server
+			Only []string `json:"only"`
+		} `json:"servers"`
+	}
+	if exists, err = config.ReadJSON(legacyPath(), &old); err != nil || exists {
+		for name, s := range old.Servers {
+			s.Include = s.Only
+			cfg.Servers[name] = s.Server
+		}
+		return cfg, exists, err
+	}
+	if exists, err = config.ReadTOML(p, &cfg.Servers); err != nil {
 		return nil, exists, err
 	}
-	if cfg.Servers == nil {
-		cfg.Servers = map[string]Server{}
+	for name, s := range cfg.Servers {
+		if err := s.Check(); err != nil {
+			return nil, exists, fmt.Errorf("%s: %s: %w", ConfigFile, name, err)
+		}
 	}
 	return cfg, exists, nil
 }
 
-// saveServers rewrites the servers map inside mcp.json.
+func legacyPath() string {
+	p, _ := config.SyncPath("mcp.json")
+	return p
+}
+
+// Convert replaces lichen 1.0's mcp.json with mcp.toml.
+func Convert() error {
+	return config.ConvertJSON(legacyPath(), func() error {
+		cfg, _, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		return saveServers(cfg.Servers)
+	})
+}
+
+// saveServers rewrites mcp.toml.
 func saveServers(servers map[string]Server) error {
 	p, err := ConfigPath()
 	if err != nil {
 		return err
 	}
-	if len(servers) == 0 {
-		// The file stays, just with no servers.
-		return config.SetJSONField(p, "servers", nil)
-	}
-	return config.SetJSONField(p, "servers", servers)
+	return config.WriteTOML(p, servers)
 }
 
 // The manifest records what THIS machine installed into which harness:
@@ -195,15 +221,15 @@ func Reconcile(env *core.Env) error {
 		return err
 	}
 	// A server for other devices is as good as unlisted here.
-	maps.DeleteFunc(cfg.Servers, func(_ string, s Server) bool { return !env.Device.In(s.Only) })
+	maps.DeleteFunc(cfg.Servers, func(_ string, s Server) bool { return !env.Device.In(s.Scope) })
 	if len(cfg.Servers) == 0 && len(man.Servers) == 0 {
 		return nil
 	}
-	// An absent mcp.json is not "zero servers": a sync folder that lost
+	// An absent mcp.toml is not "zero servers": a sync folder that lost
 	// it (a bad merge, a hand deletion) must not turn into a mass
 	// uninstall. Removing every server keeps the file, empty.
 	if !exists && len(man.Servers) > 0 {
-		lg.Printf("mcp: no mcp.json yet, leaving installed servers alone")
+		lg.Printf("mcp: no mcp.toml yet, leaving installed servers alone")
 		return nil
 	}
 
@@ -315,9 +341,8 @@ func AddServer(name string, s Server) error {
 	return saveServers(cfg.Servers)
 }
 
-// Only limits a server to some devices and groups. No groups is every
-// device.
-func Only(name string, only []string) error {
+// SetScope scopes a server to devices.
+func SetScope(name string, scope core.Scope) error {
 	cfg, _, err := loadConfig()
 	if err != nil {
 		return err
@@ -326,7 +351,7 @@ func Only(name string, only []string) error {
 	if !ok {
 		return fmt.Errorf("%q is not a synced MCP server (see: lichen mcp list)", name)
 	}
-	s.Only = only
+	s.Scope = scope
 	cfg.Servers[name] = s
 	return saveServers(cfg.Servers)
 }

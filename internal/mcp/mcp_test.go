@@ -144,24 +144,36 @@ func TestReconcile(t *testing.T) {
 
 	// A server for other devices is removed here, and comes back when
 	// this device is in again. A scope change alone reinstalls nothing.
-	if err := Only("pw", []string{"linux"}); err != nil {
+	if err := SetScope("pw", core.Scope{Include: []string{"linux"}}); err != nil {
 		t.Fatal(err)
 	}
 	reconcile()
 	expect(claude, "remove pw")
 	expect(codex, "remove pw")
-	if err := Only("pw", []string{"mac"}); err != nil {
+	if err := SetScope("pw", core.Scope{Include: []string{"mac"}}); err != nil {
 		t.Fatal(err)
 	}
 	reconcile()
 	expect(claude, "add pw")
 	expect(codex, "add pw")
-	if err := Only("pw", []string{"lychee"}); err != nil {
+	if err := SetScope("pw", core.Scope{Include: []string{"lychee"}}); err != nil {
 		t.Fatal(err)
 	}
 	reconcile()
 	expect(claude)
 	expect(codex)
+	if err := SetScope("pw", core.Scope{Exclude: []string{"lychee"}}); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	expect(claude, "remove pw")
+	expect(codex, "remove pw")
+	if err := SetScope("pw", core.Scope{}); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	expect(claude, "add pw")
+	expect(codex, "add pw")
 
 	// A harness that is missing on this machine is skipped, and what
 	// lichen installed there earlier is left as is.
@@ -181,24 +193,24 @@ func TestReconcile(t *testing.T) {
 
 	// A config entry this build rejects keeps its installs.
 	p, _ := ConfigPath()
-	if err := os.WriteFile(p, []byte(`{"servers":{"pw":{}}}`), 0o644); err != nil {
+	if err := os.WriteFile(p, []byte("[pw]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	reconcile()
 	expect(claude)
 	expect(codex)
 
-	// Neither is an mcp.json holding a bare null.
-	if err := os.WriteFile(p, []byte("null\n"), 0o644); err != nil {
+	// Neither is an mcp.toml that doesn't parse.
+	if err := os.WriteFile(p, []byte("[pw\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := Reconcile(env); err == nil {
-		t.Error("null mcp.json: expected an error")
+		t.Error("broken mcp.toml: expected an error")
 	}
 	expect(claude)
 	expect(codex)
 
-	// No mcp.json at all is not "remove everything".
+	// No mcp.toml at all is not "remove everything".
 	if err := os.Remove(p); err != nil {
 		t.Fatal(err)
 	}

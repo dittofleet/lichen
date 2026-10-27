@@ -29,20 +29,21 @@ func (e *Env) Origin() string {
 
 // hasUpstream reports whether the branch tracks one on origin. A clone
 // of an empty repo has none until its first push, or until another
-// device's push creates the branch, which is picked up here.
-func (e *Env) hasUpstream() bool {
+// device's push creates the branch, which is picked up here. A failed
+// fetch is an error: there may be a branch it couldn't see.
+func (e *Env) hasUpstream() (bool, error) {
 	if _, err := e.Git("rev-parse", "--abbrev-ref", "@{u}"); err == nil {
-		return true
+		return true, nil
 	}
 	branch, err := e.Git("branch", "--show-current")
 	if err != nil || branch == "" {
-		return false
+		return false, nil
 	}
 	if _, err := e.Git("fetch", "--quiet", "origin"); err != nil {
-		return false
+		return false, err
 	}
 	_, err = e.Git("branch", "--quiet", "--set-upstream-to=origin/"+branch)
-	return err == nil
+	return err == nil, nil
 }
 
 func (e *Env) rebasing() bool {
@@ -72,8 +73,11 @@ func (e *Env) abortStaleRebase() {
 // branch exists nowhere but here.
 func (e *Env) pull() error {
 	e.abortStaleRebase()
-	if e.Origin() == "" || !e.hasUpstream() {
+	if e.Origin() == "" {
 		return nil
+	}
+	if up, err := e.hasUpstream(); err != nil || !up {
+		return err
 	}
 	_, err := e.Git("pull", "--rebase", "-X", "theirs", "--quiet")
 	if err != nil && e.rebasing() {
@@ -219,7 +223,7 @@ func (e *Env) Push() error {
 	if e.Origin() == "" {
 		return nil
 	}
-	if e.hasUpstream() {
+	if up, _ := e.hasUpstream(); up {
 		if out, err := e.Git("rev-list", "--count", "@{u}..HEAD"); err != nil || out == "0" {
 			return nil
 		}
@@ -247,9 +251,9 @@ func (e *Env) Push() error {
 
 // Setup creates this machine's sync folder: a clone of url, or with no
 // url a folder of its own, not synced anywhere until it gets an origin.
-// An empty repo is a first device, and gets lichen.json to mark it (and
+// An empty repo is a first device, and gets lichen.toml to mark it (and
 // a .gitignore, so editors' droppings in the folder never sync). A
-// repo with content but no lichen.json is not a sync repo (most likely
+// repo with content but no lichen.toml is not a sync repo (most likely
 // lichen's own source repo, passed by mistake) and is refused.
 func Setup(url string) (string, error) {
 	dir, err := config.SyncDir()
@@ -282,14 +286,16 @@ func Setup(url string) (string, error) {
 		return dir, err
 	}
 	settings := filepath.Join(dir, SettingsFile)
-	if _, err := os.Stat(settings); err == nil {
-		return dir, nil
+	for _, p := range []string{settings, filepath.Join(dir, "lichen.json")} { // lichen.json: lichen 1.0
+		if _, err := os.Stat(p); err == nil {
+			return dir, nil
+		}
 	}
 	if _, err := gitutil.Run(dir, "rev-parse", "--verify", "--quiet", "HEAD"); err == nil {
 		os.RemoveAll(dir)
 		return dir, fmt.Errorf("%s has files but no %s, so it is not a lichen sync repo (the sync repo is a separate, initially empty, private repo)", url, SettingsFile)
 	}
-	if err := config.WriteJSON(settings, map[string]any{}); err != nil {
+	if err := config.WriteFile(settings, nil, 0o644); err != nil {
 		return dir, err
 	}
 	return dir, config.WriteFile(filepath.Join(dir, ".gitignore"), []byte(config.GitIgnore), 0o644)

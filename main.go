@@ -30,8 +30,22 @@ func main() {
 	log.SetFlags(0)
 	args := os.Args[1:]
 	if len(args) == 0 {
-		usage()
+		printHelp(nil)
 		os.Exit(2)
+	}
+	// `lichen <command> --help` and `lichen <command> <sub> --help`.
+	for i := 1; i < len(args) && i <= 2; i++ {
+		if isHelp(args[i]) {
+			// After an argument that is no subcommand, the command's page.
+			err := printHelp(args[:i])
+			if err != nil && i == 2 {
+				err = printHelp(args[:1])
+			}
+			if err != nil {
+				log.Fatalf("lichen: %v", err)
+			}
+			return
+		}
 	}
 	lichen := app.New()
 	lichen.AfterUpdate = func() error {
@@ -74,10 +88,10 @@ func main() {
 	case "version", "--version":
 		fmt.Println("lichen " + version.Current)
 	case "help", "-h", "--help":
-		usage()
+		err = printHelp(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "lichen: unknown command %q\n\n", args[0])
-		usage()
+		printHelp(nil)
 		os.Exit(2)
 	}
 	// The version gate refused the command: this build is older than the
@@ -90,61 +104,6 @@ func main() {
 		log.Fatalf("lichen: %v", err)
 	}
 	updatecheck.MaybeCheck(lichen, args[0])
-}
-
-func usage() {
-	fmt.Print(`lichen keeps your devices in sync
-
-  lichen setup [<git url>]         set this device up with your sync repo
-
-  lichen files                     show every synced file and where it goes
-  lichen files add <path>... [--name <source>] [--only <groups>]
-                                   start syncing files or directories
-  lichen files add <path> --to <source> [--only <groups>]
-                                   write a source to another path as well
-  lichen files remove <source|path>...
-                                   stop syncing (files stay where they are)
-  lichen files only <source|path> [<group>...]
-                                   choose the devices an output is for
-  lichen files recover <source|path>...
-                                   bring back deleted files, everywhere
-
-  lichen skills add <repo> [--skill <name>]... [--only <groups>]
-                                   sync agent skills from a public repo
-  lichen skills remove <repo|skill...>
-                                   stop syncing skills (uninstalls them)
-  lichen skills only <repo> [<group>...]
-                                   choose the devices a repo's skills are for
-  lichen skills list               show every synced skill
-  lichen skills update             check skill repos for updates now
-
-  lichen mcp add <name> [--only <groups>] <command> [args...]
-  lichen mcp add <name> [--only <groups>] <url>
-                                   install an MCP server in every harness
-  lichen mcp remove <name...>      stop syncing MCP servers (uninstalls them)
-  lichen mcp only <name> [<group>...]
-                                   choose the devices a server is for
-  lichen mcp list                  show every synced MCP server
-
-  lichen devices                   show your devices and their groups
-  lichen groups add <group> <device>...
-  lichen groups remove <group> [<device>...]
-
-  lichen resolve [<path> --keep here|synced | --into <source>]
-                                   settle edits lichen can't place on its own
-  lichen sync                      pull and sync everything now
-  lichen status                    what lichen is doing on this device
-  lichen logs                      follow the daemon log
-  lichen start | stop | restart    control the background daemon
-  lichen update                    update to the latest release
-  lichen uninstall [--yes]         remove lichen, keep your files
-  lichen version                   print the installed version
-
-Groups are device names, mac, linux, or your own (lichen groups). Give
-several as a comma list: --only mac,servers.
-`)
-	// `lichen daemon` and `lichen postinstall` are deliberately absent: the
-	// service manager and the install script run them, not people.
 }
 
 func clilog() *log.Logger { return log.New(os.Stdout, "", 0) }
@@ -182,24 +141,58 @@ func change(subject string, edit func(env *core.Env) error) error {
 	})
 }
 
-// cmdOnly scopes something to devices and groups, through change.
-func cmdOnly(what string, groups []string, scope func(env *core.Env) error) error {
-	for _, g := range groups {
-		if err := core.ValidGroup(g); err != nil {
+// cmdScope runs `<module> include|exclude <thing> [<device|group>...]`,
+// scoping the thing through set. Excluding nothing is every device
+// again.
+func cmdScope(module string, args []string, set func(env *core.Env, thing string, scope core.Scope) error) error {
+	if len(args) < 2 || (args[0] == "include" && len(args) < 3) {
+		return usage(module, args[0])
+	}
+	thing, names := args[1], args[2:]
+	for _, n := range names {
+		if err := core.ValidGroup(n); err != nil {
 			return err
 		}
 	}
-	msg := fmt.Sprintf("%s goes to %s", what, core.Describe(groups))
-	if err := change(msg, scope); err != nil {
+	scope := core.Scope{Exclude: names}
+	if args[0] == "include" {
+		scope = core.Scope{Include: names}
+	}
+	msg := fmt.Sprintf("%s: %s goes to %s", module, targets(thing), core.Describe(scope))
+	if err := change(msg, func(env *core.Env) error { return set(env, thing, scope) }); err != nil {
 		return err
 	}
 	fmt.Println(msg)
 	return nil
 }
 
+// scopeFlag adds to scope from --include or --exclude and a comma list
+// of devices and groups. A thing has one or the other.
+func scopeFlag(scope *core.Scope, flag, list string) error {
+	if (flag == "--include" && scope.Exclude != nil) || (flag == "--exclude" && scope.Include != nil) {
+		return errors.New("use --include or --exclude, not both")
+	}
+	var names []string
+	for _, n := range strings.Split(list, ",") {
+		if n = strings.TrimSpace(n); n == "" {
+			continue
+		}
+		if err := core.ValidGroup(n); err != nil {
+			return err
+		}
+		names = append(names, n)
+	}
+	if flag == "--include" {
+		scope.Include = append(scope.Include, names...)
+	} else {
+		scope.Exclude = append(scope.Exclude, names...)
+	}
+	return nil
+}
+
 // notHere shows a listed thing that is for other devices.
-func notHere(line string, only []string) string {
-	return dim(fmt.Sprintf("%s  (%s, not this device)", line, core.Describe(only)))
+func notHere(line string, scope core.Scope) string {
+	return dim(fmt.Sprintf("%s  (%s, not this device)", line, core.Describe(scope)))
 }
 
 // updateAndRerun installs the release the sync folder requires, restarts
@@ -268,7 +261,7 @@ func tilde(paths ...string) string {
 }
 
 // targets shows arguments that are a source name or a path, as files
-// remove, only and recover take them: a name stays as it is.
+// remove, include, exclude and recover take them: a name stays as it is.
 func targets(args ...string) string {
 	out := make([]string, len(args))
 	for i, a := range args {
@@ -278,19 +271,4 @@ func targets(args ...string) string {
 		}
 	}
 	return strings.Join(out, " ")
-}
-
-// groupList parses a comma list of groups, as --only takes them.
-func groupList(s string) ([]string, error) {
-	var groups []string
-	for _, g := range strings.Split(s, ",") {
-		if g = strings.TrimSpace(g); g == "" {
-			continue
-		}
-		if err := core.ValidGroup(g); err != nil {
-			return nil, err
-		}
-		groups = append(groups, g)
-	}
-	return groups, nil
 }

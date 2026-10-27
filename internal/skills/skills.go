@@ -7,7 +7,7 @@
 // limited to some harnesses (metadata.lichen-harnesses) lives in lichen's
 // private store instead, since some harnesses read ~/.agents/skills. WHICH
 // repos to sync and which harnesses to link live in this module's own
-// config file (skills.json in the sync folder). Clones and install
+// config file (skills.toml in the sync folder). Clones and install
 // bookkeeping stay machine-local. Only skills recorded in the local manifest are ever
 // touched, so skills installed by other means (npx skills, a manual
 // copy) always coexist with lichen's.
@@ -25,13 +25,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
+
 	"lichen/internal/config"
 	"lichen/internal/core"
 	"lichen/internal/gitutil"
 )
 
 // ConfigFile is the module's config in the sync folder.
-const ConfigFile = "skills.json"
+const ConfigFile = "skills.toml"
 
 // ConfigPath is where the module's config lives.
 func ConfigPath() (string, error) { return config.SyncPath(ConfigFile) }
@@ -64,28 +66,23 @@ func claudeSkillsDir() (string, error) {
 	return config.HomeJoin(".claude", "skills")
 }
 
-// Source selects agent skills to sync from one public git repo. Empty
-// Skills means every skill the repo publishes, minus Except. Except
-// records removals from an every-skill source as INTENT: pinning the
-// remaining skills instead would bake one machine's install state (name
-// collisions, foreign dirs it skipped) into the shared config and
-// uninstall skills other machines legitimately have.
+// Source selects agent skills to sync from one public git repo, for the
+// devices in its scope. Empty Skills means every skill the repo
+// publishes.
 type Source struct {
-	Repo   string   `json:"repo"`
-	Skills []string `json:"skills,omitempty"`
-	Except []string `json:"except,omitempty"`
-	// Only limits the repo's skills to these devices and groups. Empty
-	// is every device.
-	Only []string `json:"only,omitempty"`
+	Repo   string   `toml:"-"` // its key in skills.toml
+	Skills []string `toml:"skills,omitempty"`
+	core.Scope
 }
 
-// skillsConfig is the synced skills config file. Harnesses lists the
-// directories that get a per-skill symlink to the canonical copy, in ~/
-// form (the file travels between machines). Absent means Claude Code's
+// skillsConfig is the synced skills config file: Harnesses, then a
+// table per source, keyed by its repo. Harnesses lists the directories
+// that get a per-skill symlink to the canonical copy, in ~/ form (the
+// file travels between machines). Absent means Claude Code's
 // ~/.claude/skills. Hand-edited for now: lichen has no CLI for it.
 type skillsConfig struct {
-	Sources   []Source `json:"sources"`
-	Harnesses []string `json:"harnesses,omitempty"`
+	Sources   []Source
+	Harnesses []string
 }
 
 // loadConfig reads the synced skills config. The exists flag lets the
@@ -97,10 +94,77 @@ func loadConfig() (cfg *skillsConfig, exists bool, err error) {
 		return nil, false, err
 	}
 	cfg = &skillsConfig{}
-	if exists, err = config.ReadJSON(p, cfg); err != nil {
+	// lichen 1.0's skills.json, until a pass converts it. Its only is include.
+	var old struct {
+		Sources []struct {
+			Repo   string   `json:"repo"`
+			Skills []string `json:"skills"`
+			Only   []string `json:"only"`
+		} `json:"sources"`
+		Harnesses []string `json:"harnesses"`
+	}
+	if exists, err = config.ReadJSON(legacyPath(), &old); err != nil || exists {
+		cfg.Harnesses = old.Harnesses
+		for _, s := range old.Sources {
+			cfg.Sources = append(cfg.Sources, Source{Repo: s.Repo, Skills: s.Skills, Scope: core.Scope{Include: s.Only}})
+		}
+		return cfg, exists, err
+	}
+	var raw map[string]toml.Primitive
+	exists, err = config.DecodeTOML(p, &raw, func(md toml.MetaData) error {
+		for _, key := range slices.Sorted(maps.Keys(raw)) {
+			var err error
+			if key == "harnesses" {
+				err = md.PrimitiveDecode(raw[key], &cfg.Harnesses)
+			} else {
+				src := Source{Repo: key}
+				if err = md.PrimitiveDecode(raw[key], &src); err == nil {
+					err = src.Check()
+				}
+				cfg.Sources = append(cfg.Sources, src)
+			}
+			if err != nil {
+				return fmt.Errorf("%s: %w", key, err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, exists, err
 	}
 	return cfg, exists, nil
+}
+
+func legacyPath() string {
+	p, _ := config.SyncPath("skills.json")
+	return p
+}
+
+// Convert replaces lichen 1.0's skills.json with skills.toml.
+func Convert() error {
+	return config.ConvertJSON(legacyPath(), func() error {
+		cfg, _, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		p, err := ConfigPath()
+		if err != nil {
+			return err
+		}
+		return config.WriteTOML(p, cfg.file())
+	})
+}
+
+// file lays the config out as skills.toml does.
+func (c *skillsConfig) file() map[string]any {
+	f := map[string]any{}
+	if len(c.Harnesses) > 0 {
+		f["harnesses"] = c.Harnesses
+	}
+	for _, src := range c.Sources {
+		f[src.Repo] = src
+	}
+	return f
 }
 
 func loadSources() ([]Source, error) {
@@ -137,19 +201,18 @@ func (c *skillsConfig) harnessDirs(lg *log.Logger) []string {
 	return dirs
 }
 
-// saveSources rewrites the sources list inside skills.json, keeping any
-// top-level field this build doesn't know about: the file is shared by
-// machines that may run different lichen versions.
+// saveSources rewrites the sources in skills.toml.
 func saveSources(sources []Source) error {
+	cfg, _, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	cfg.Sources = sources
 	p, err := ConfigPath()
 	if err != nil {
 		return err
 	}
-	if len(sources) == 0 {
-		// The file stays, just with no sources.
-		return config.SetJSONField(p, "sources", nil)
-	}
-	return config.SetJSONField(p, "sources", sources)
+	return config.WriteTOML(p, cfg.file())
 }
 
 // The manifest records what THIS machine has installed and from where.
@@ -630,11 +693,11 @@ func run(env *core.Env, force bool) error {
 	if len(sources) == 0 && len(man.Skills) == 0 && len(man.Repos) == 0 {
 		return nil
 	}
-	// An absent skills.json is not "zero sources": a sync folder that
+	// An absent skills.toml is not "zero sources": a sync folder that
 	// lost it (a bad merge, a hand deletion) must not turn into a mass
 	// uninstall. Removing every source keeps the file, empty.
 	if !exists && len(man.Skills) > 0 {
-		lg.Printf("skills: no skills.json yet, leaving installed skills alone")
+		lg.Printf("skills: no skills.toml yet, leaving installed skills alone")
 		return nil
 	}
 	harnesses := scfg.harnessDirs(lg)
@@ -647,9 +710,9 @@ func run(env *core.Env, force bool) error {
 	// Fold config entries into one selection per repo (a hand-edited
 	// config may list a repo twice).
 	type selection struct {
-		url            string
-		all            bool
-		skills, except map[string]bool
+		url    string
+		all    bool
+		skills map[string]bool
 	}
 	selections := map[string]*selection{}
 	var order []string
@@ -660,7 +723,7 @@ func run(env *core.Env, force bool) error {
 	for _, src := range sources {
 		// What a source for other devices covers goes from this one,
 		// whatever it is.
-		if !env.Device.In(src.Only) {
+		if !env.Device.In(src.Scope) {
 			continue
 		}
 		key, url, err := parseSpec(src.Repo)
@@ -671,7 +734,7 @@ func run(env *core.Env, force bool) error {
 		}
 		sel := selections[key]
 		if sel == nil {
-			sel = &selection{url: url, skills: map[string]bool{}, except: map[string]bool{}}
+			sel = &selection{url: url, skills: map[string]bool{}}
 			selections[key] = sel
 			order = append(order, key)
 		}
@@ -680,9 +743,6 @@ func run(env *core.Env, force bool) error {
 		}
 		for _, n := range src.Skills {
 			sel.skills[sanitizeName(n)] = true
-		}
-		for _, n := range src.Except {
-			sel.except[sanitizeName(n)] = true
 		}
 	}
 
@@ -705,11 +765,7 @@ func run(env *core.Env, force bool) error {
 			}
 		}
 		for _, name := range slices.Sorted(maps.Keys(found)) {
-			if sel.all {
-				if sel.except[name] {
-					continue
-				}
-			} else if !sel.skills[name] {
+			if !sel.all && !sel.skills[name] {
 				continue
 			}
 			// A duplicate can only come from an earlier repo: names are
@@ -830,11 +886,11 @@ func run(env *core.Env, force bool) error {
 // AddSource records a repo (optionally narrowed to some skills) as a
 // skill source, saves the skills config, and returns the source as saved,
 // under its canonical key. Install happens on the next reconcile, which
-// the CLI runs immediately after. A nil only leaves an existing source's
-// devices as they were. A repo without the skills named, or without any,
+// the CLI runs immediately after. A scope of every device leaves an
+// existing source's devices as they were. A repo without the skills named, or without any,
 // is refused before anything is saved: every device would otherwise go
 // on failing to install them.
-func AddSource(spec string, names, only []string, lg *log.Logger) (Source, error) {
+func AddSource(spec string, names []string, scope core.Scope, lg *log.Logger) (Source, error) {
 	key, url, err := parseSpec(spec)
 	if err != nil {
 		return Source{}, err
@@ -862,25 +918,18 @@ func AddSource(spec string, names, only []string, lg *log.Logger) (Source, error
 		}
 		switch {
 		case len(names) == 0:
-			sources[i].Skills, sources[i].Except = nil, nil // widen to every skill in the repo
+			sources[i].Skills = nil // widen to every skill in the repo
 		case src.Skills != nil:
 			sources[i].Skills = slices.Compact(slices.Sorted(slices.Values(append(src.Skills, names...))))
-		default:
-			// An every-skill source already covers the names: re-adding
-			// them just lifts any standing exclusion.
-			sources[i].Except = slices.DeleteFunc(src.Except, func(s string) bool { return slices.Contains(names, s) })
-			if len(sources[i].Except) == 0 {
-				sources[i].Except = nil
-			}
 		}
-		if only != nil {
-			sources[i].Only = only
+		if !scope.Everywhere() {
+			sources[i].Scope = scope
 		}
 		saved := sources[i]
 		saved.Repo = key
 		return saved, saveSources(sources)
 	}
-	sources = append(sources, Source{Repo: key, Skills: names, Only: only})
+	sources = append(sources, Source{Repo: key, Skills: names, Scope: scope})
 	return sources[len(sources)-1], saveSources(sources)
 }
 
@@ -909,9 +958,8 @@ func hasSkills(key, url string, names []string, lg *log.Logger) error {
 	return nil
 }
 
-// Only limits a repo's skills to some devices and groups. No groups is
-// every device.
-func Only(spec string, only []string) error {
+// SetScope scopes a repo's skills to devices.
+func SetScope(spec string, scope core.Scope) error {
 	key, _, err := parseSpec(spec)
 	if err != nil {
 		return err
@@ -923,7 +971,7 @@ func Only(spec string, only []string) error {
 	found := false
 	for i, src := range sources {
 		if k, _, err := parseSpec(src.Repo); err == nil && k == key {
-			sources[i].Only, found = only, true
+			sources[i].Scope, found = scope, true
 		}
 	}
 	if !found {
@@ -934,10 +982,8 @@ func Only(spec string, only []string) error {
 
 // RemoveSources drops skills or whole repos from the skills config. An
 // arg with a slash is a repo spec and removes the whole source. Anything
-// else is a skill name. Removing one skill from an every-skill source records
-// it in the source's Except list. That is intent, not a pin of this
-// machine's manifest, so machines whose install sets differ (collisions,
-// foreign dirs) all remove exactly the named skill and nothing else.
+// else is a skill name, which goes from the source naming it: one that
+// syncs every skill from its repo has none to drop.
 func RemoveSources(args []string) error {
 	sources, err := loadSources()
 	if err != nil {
@@ -973,20 +1019,10 @@ func RemoveSources(args []string) error {
 			}
 			continue
 		}
-		// Not pinned anywhere: the manifest says which repo installed it,
-		// and that repo's every-skill source gets the exclusion.
-		st := man.Skills[name]
-		if st == nil {
-			return fmt.Errorf("%q is not a synced skill (see: lichen skills list)", arg)
+		if st := man.Skills[name]; st != nil {
+			return fmt.Errorf("%s comes with every skill from %s: remove the repo, and add it again with --skill for the ones you want", name, st.Repo)
 		}
-		idx := slices.IndexFunc(sources, func(s Source) bool {
-			k, _, err := parseSpec(s.Repo)
-			return err == nil && k == st.Repo && s.Skills == nil
-		})
-		if idx < 0 {
-			return fmt.Errorf("%q is not a synced skill (see: lichen skills list)", arg)
-		}
-		sources[idx].Except = slices.Compact(slices.Sorted(slices.Values(append(sources[idx].Except, name))))
+		return fmt.Errorf("%q is not a synced skill (see: lichen skills list)", arg)
 	}
 	return saveSources(sources)
 }
@@ -1011,17 +1047,17 @@ func Installed() ([]Skill, error) {
 	return out, nil
 }
 
-// Configured returns the configured skill repos, in config order, each
+// Configured returns the configured skill repos, sorted by repo, each
 // under its canonical key (unparseable entries pass through as written).
-func Configured() []Source {
+func Configured() ([]Source, error) {
 	sources, err := loadSources()
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	for i, src := range sources {
 		if key, _, err := parseSpec(src.Repo); err == nil {
 			sources[i].Repo = key
 		}
 	}
-	return sources
+	return sources, nil
 }

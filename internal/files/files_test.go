@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -118,10 +119,10 @@ func (d *device) has(rel string) bool {
 	return err == nil
 }
 
-func (d *device) add(rel string, only ...string) {
+func (d *device) add(rel string, include ...string) {
 	d.t.Helper()
 	d.change(func(env *core.Env) error {
-		_, err := files.Add(env, []string{"~/" + rel}, "", only)
+		_, err := files.Add(env, []string{"~/" + rel}, "", core.Scope{Include: include})
 		return err
 	})
 }
@@ -256,7 +257,7 @@ func TestScopes(t *testing.T) {
 
 	// A custom group brings banana in.
 	a.change(func(env *core.Env) error {
-		return files.Only(env, "~/.zshrc", []string{"apple", "fruit"})
+		return files.SetScope(env, "~/.zshrc", core.Scope{Include: []string{"apple", "fruit"}})
 	})
 	a.change(func(env *core.Env) error { return env.EditGroup(true, "fruit", []string{"banana"}) })
 	b.sync()
@@ -264,9 +265,162 @@ func TestScopes(t *testing.T) {
 
 	// Scoping banana out again leaves its copy, no longer synced.
 	a.sync()
-	a.change(func(env *core.Env) error { return files.Only(env, "zshrc", []string{"apple"}) })
+	a.change(func(env *core.Env) error { return files.SetScope(env, "zshrc", core.Scope{Include: []string{"apple"}}) })
 	b.sync()
 	expect(t, b, ".zshrc", "apple only\n")
+
+	// Excluding apple sends it everywhere else instead.
+	os.Remove(b.path(".zshrc"))
+	a.change(func(env *core.Env) error { return files.SetScope(env, "zshrc", core.Scope{Exclude: []string{"apple"}}) })
+	b.sync()
+	expect(t, b, ".zshrc", "apple only\n")
+}
+
+// A device still on lichen 1.0's JSON doesn't convert it over a newer
+// TOML another device pushed: it converts only after a pull.
+func TestStaleJSONDoesNotRevertTOML(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	// Commits lichen.json as lichen 1.0 would, and pushes it.
+	push1 := func(groups string) {
+		a.use()
+		a.write("lichen/lichen.json", `{"groups": {"fruit": [`+groups+`]}}`)
+		os.Remove(a.path("lichen/lichen.toml"))
+		for _, args := range [][]string{
+			{"add", "-A"},
+			{"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "lichen 1.0"},
+			{"push", "-q"},
+		} {
+			if out, err := exec.Command("git", append([]string{"-C", a.path("lichen")}, args...)...).CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
+		}
+	}
+	push1(`"apple"`)
+	b := freshDevice(t, "banana")
+	if _, err := core.Setup(remote); err != nil {
+		t.Fatal(err)
+	}
+	push1(`"apple", "cherry"`)
+
+	a.sync()
+	a.change(func(env *core.Env) error { return env.EditGroup(true, "fruit", []string{"banana"}) })
+	if got := b.env().Settings.GroupsOf("banana"); len(got) != 0 {
+		t.Fatalf("banana read stale groups %v", got)
+	}
+	b.sync()
+	a.sync()
+	for _, d := range []*device{a, b} {
+		if got := d.env().Settings.Groups["fruit"]; strings.Join(got, " ") != "apple cherry banana" {
+			t.Errorf("%s: fruit = %v", d.name, got)
+		}
+	}
+}
+
+// A source deleted under lichen 1.0 comes back with its scope.
+func TestRecoverOnlyScope(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write(".vimrc", "v\n")
+	a.add(".vimrc", "apple")
+	os.Remove(a.path(".vimrc"))
+	a.sync()
+	p := a.path("lichen/.lichen/deleted.json")
+	b, _ := os.ReadFile(p)
+	os.WriteFile(p, []byte(strings.ReplaceAll(string(b), `"include":`, `"only":`)), 0o644)
+	a.change(func(env *core.Env) error {
+		_, err := files.Recover(env, []string{"vimrc"})
+		return err
+	})
+	if b, _ := os.ReadFile(a.path("lichen/files.toml")); !strings.Contains(string(b), "include = [\"apple\"]") {
+		t.Errorf("recovered vimrc lost its scope:\n%s", b)
+	}
+}
+
+// lichen 1.0's JSON configs are read as they are until a pass converts
+// them to TOML, their "only" scopes becoming "include".
+func TestConvertJSON(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	os.Remove(a.path("lichen/lichen.toml"))
+	a.write("lichen/lichen.json", `{"groups": {"fruit": ["apple", "banana"]}}`)
+	a.write("lichen/files.json", `{"sources": {
+		"zshrc": {"to": [{"path": "~/.zshrc", "only": ["mac"]}, {"path": "~/.bashrc"}]},
+		"netrc": {"to": [{"path": "~/.netrc"}], "private": true}
+	}}`)
+
+	// Reading converts nothing.
+	env := a.env()
+	if got := strings.Join(env.Device.Groups[1:], " "); got != "fruit" {
+		t.Fatalf("groups from lichen.json = %q", got)
+	}
+	entries, err := files.List(env)
+	if err != nil || len(entries) != 2 || !slices.Equal(entries[1].Outputs[0].Include, []string{"mac"}) {
+		t.Fatalf("files from files.json = %+v, %v", entries, err)
+	}
+	if a.has("lichen/files.toml") {
+		t.Fatal("reading wrote files.toml")
+	}
+
+	a.sync()
+	for f, want := range map[string]string{
+		"lichen.toml": "[groups]\nfruit = [\"apple\", \"banana\"]\n",
+		"files.toml": `["~/.bashrc"]
+source = "zshrc"
+
+["~/.netrc"]
+private = true
+
+["~/.zshrc"]
+include = ["mac"]
+`,
+	} {
+		if b, _ := os.ReadFile(a.path("lichen/" + f)); string(b) != want {
+			t.Errorf("%s:\n%s\nwant:\n%s", f, b, want)
+		}
+	}
+	for _, f := range []string{"lichen.json", "files.json"} {
+		if a.has("lichen/" + f) {
+			t.Errorf("%s is still there", f)
+		}
+	}
+
+	// A JSON config beside a TOML one is a newer edit from an older
+	// build: it wins.
+	a.write("lichen/files.json", `{"sources": {"other": {"to": [{"path": "~/.other"}]}}}`)
+	a.sync()
+	if b, _ := os.ReadFile(a.path("lichen/files.toml")); string(b) != "[\"~/.other\"]\n" || a.has("lichen/files.json") {
+		t.Errorf("files.json beside files.toml:\n%s", b)
+	}
+}
+
+// Until its JSON configs are converted, which takes a pull, a device
+// changes nothing in the sync folder.
+func TestNoChangesBeforeConversion(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write("lichen/lichen.json", `{"groups": {"fruit": ["apple"]}}`)
+	// Offline, and with no upstream, as a clone of an empty repo starts:
+	// a fetch that fails is no pull.
+	for _, args := range [][]string{
+		{"remote", "set-url", "origin", filepath.Join(t.TempDir(), "gone.git")},
+		{"branch", "--unset-upstream"},
+	} {
+		if out, err := exec.Command("git", append([]string{"-C", a.path("lichen")}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+	}
+	env := a.env()
+	err := module.Change(env, "test", func() error { return env.EditGroup(true, "fruit", []string{"banana"}) })
+	if err == nil || !strings.Contains(err.Error(), "converts its configs") {
+		t.Fatalf("offline edit before conversion: %v", err)
+	}
+	if err := module.Local(a.env()); err == nil {
+		t.Fatal("local pass before conversion: no error")
+	}
+	if b, _ := os.ReadFile(a.path("lichen/lichen.toml")); strings.Contains(string(b), "banana") {
+		t.Fatal("the edit was saved")
+	}
 }
 
 func TestSeveralOutputs(t *testing.T) {
@@ -275,7 +429,7 @@ func TestSeveralOutputs(t *testing.T) {
 	a.write(".claude/CLAUDE.md", "be brief\n")
 	a.add(".claude/CLAUDE.md")
 	a.change(func(env *core.Env) error {
-		return files.AddOutput(env, "claude/CLAUDE.md", "~/.codex/AGENTS.md", nil)
+		return files.AddOutput(env, "claude/CLAUDE.md", "~/.codex/AGENTS.md", core.Scope{})
 	})
 	expect(t, a, ".codex/AGENTS.md", "be brief\n")
 
@@ -360,7 +514,7 @@ func TestGroupEditsDoNotRevertEachOther(t *testing.T) {
 	a.change(func(env *core.Env) error { return env.EditGroup(true, "fruit", []string{"apple", "banana"}) })
 	b.change(func(env *core.Env) error { return env.EditGroup(true, "servers", []string{"banana"}) })
 	a.sync()
-	if got := strings.Join(a.env().Device.Groups, " "); got != "apple mac fruit" && got != "apple linux fruit" {
+	if got := strings.Join(a.env().Device.Groups, " "); got != "mac fruit" && got != "linux fruit" {
 		t.Fatalf("apple's groups = %q", got)
 	}
 	if got := b.env().Settings.GroupsOf("banana"); strings.Join(got, " ") != "fruit servers" {
@@ -398,7 +552,7 @@ func TestEditorDroppingsDoNotSync(t *testing.T) {
 	}
 }
 
-// An output written into files.json by hand is held to what lichen
+// An output written into files.toml by hand is held to what lichen
 // files add allows: under the home directory, outside lichen's folders.
 func TestOutputsOutsideHomeAreIgnored(t *testing.T) {
 	remote := newRemote(t)
@@ -407,12 +561,14 @@ func TestOutputsOutsideHomeAreIgnored(t *testing.T) {
 	a.add(".zshrc")
 	outside := filepath.Join(filepath.Dir(a.home), "outside-"+filepath.Base(a.home))
 	t.Cleanup(func() { os.Remove(outside) })
-	a.write("lichen/files.json", `{"sources": {"zshrc": {"to": [
-		{"path": "~/.zshrc"},
-		{"path": "~/../`+filepath.Base(outside)+`"},
-		{"path": "~/lichen/zshrc"},
-		{"path": "relative/zshrc"}
-	]}}}`)
+	a.write("lichen/files.toml", `["~/.zshrc"]
+["~/../`+filepath.Base(outside)+`"]
+source = "zshrc"
+["~/lichen/zshrc"]
+source = "zshrc"
+["relative/zshrc"]
+source = "zshrc"
+`)
 	a.sync()
 	expect(t, a, ".zshrc", "z\n")
 	for _, p := range []string{outside, a.path("lichen/zshrc"), a.path("relative/zshrc")} {
@@ -441,19 +597,22 @@ func TestDirectEditsAreDescribed(t *testing.T) {
 }
 
 func TestDeviceGroups(t *testing.T) {
-	d := core.Device{Name: "lychee", Groups: []string{"lychee", "mac", "servers"}}
+	d := core.Device{Name: "lychee", Groups: []string{"mac", "servers"}}
 	for _, c := range []struct {
-		only []string
-		want bool
+		scope core.Scope
+		want  bool
 	}{
-		{nil, true},
-		{[]string{"mac"}, true},
-		{[]string{"linux"}, false},
-		{[]string{"linux", "servers"}, true},
-		{[]string{"lychee"}, true},
+		{core.Scope{}, true},
+		{core.Scope{Include: []string{"mac"}}, true},
+		{core.Scope{Include: []string{"linux"}}, false},
+		{core.Scope{Include: []string{"linux", "servers"}}, true},
+		{core.Scope{Include: []string{"lychee"}}, true},
+		{core.Scope{Exclude: []string{"lychee"}}, false},
+		{core.Scope{Exclude: []string{"servers"}}, false},
+		{core.Scope{Exclude: []string{"linux", "hetzner"}}, true},
 	} {
-		if got := d.In(c.only); got != c.want {
-			t.Errorf("In(%v) = %v, want %v", c.only, got, c.want)
+		if got := d.In(c.scope); got != c.want {
+			t.Errorf("In(%+v) = %v, want %v", c.scope, got, c.want)
 		}
 	}
 }
@@ -543,7 +702,7 @@ func TestDeletingOneOutputDeletesTheSource(t *testing.T) {
 	a.write(".claude/CLAUDE.md", "x\n")
 	a.add(".claude/CLAUDE.md")
 	a.change(func(env *core.Env) error {
-		return files.AddOutput(env, "claude/CLAUDE.md", "~/.codex/AGENTS.md", nil)
+		return files.AddOutput(env, "claude/CLAUDE.md", "~/.codex/AGENTS.md", core.Scope{})
 	})
 	b := newDevice(t, remote, "banana")
 
@@ -657,8 +816,8 @@ func TestOverlappingAddsAreRefused(t *testing.T) {
 	a.write(".claude/commands/one.md", "1")
 	a.add(".claude/commands")
 	env := a.env()
-	for _, p := range []string{"~/.claude/commands/one.md", "~/.claude", "~/lichen/files.json"} {
-		if _, err := files.Add(env, []string{p}, "", nil); err == nil {
+	for _, p := range []string{"~/.claude/commands/one.md", "~/.claude", "~/lichen/files.toml"} {
+		if _, err := files.Add(env, []string{p}, "", core.Scope{}); err == nil {
 			t.Errorf("adding %s: expected a refusal", p)
 		}
 	}
@@ -668,14 +827,14 @@ func TestOverlappingAddsAreRefused(t *testing.T) {
 	a.write("claude/notes.md", "n")
 	a.write(".claude/settings.json", "{}")
 	for p, name := range map[string]string{"~/claude": "", "~/.claude/settings.json": "claude/commands/x"} {
-		if _, err := files.Add(env, []string{p}, name, nil); err == nil {
+		if _, err := files.Add(env, []string{p}, name, core.Scope{}); err == nil {
 			t.Errorf("adding %s as %q: expected a refusal", p, name)
 		}
 	}
 
 	// A directory output may not bring files of its own along.
 	a.write(".codex/prompts/mine.md", "m")
-	if err := files.AddOutput(env, "claude/commands", "~/.codex/prompts", nil); err == nil {
+	if err := files.AddOutput(env, "claude/commands", "~/.codex/prompts", core.Scope{}); err == nil {
 		t.Error("adding an output over a directory with other files: expected a refusal")
 	}
 }
@@ -754,7 +913,7 @@ func TestSourceKeptOverADeletionStaysRemovable(t *testing.T) {
 
 	os.Rename(remote, remote+".away")
 	b.write(".zshrc", "edited on banana\n")
-	b.change(func(env *core.Env) error { return files.AddOutput(env, "zshrc", "~/.zshrc.local", nil) })
+	b.change(func(env *core.Env) error { return files.AddOutput(env, "zshrc", "~/.zshrc.local", core.Scope{}) })
 	os.Rename(remote+".away", remote)
 	os.Remove(a.path(".zshrc"))
 	a.sync()

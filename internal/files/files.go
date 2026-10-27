@@ -572,7 +572,7 @@ func place(env *core.Env, rec *record, live []byte, into []string, ours bool) (m
 			return b, nil
 		}
 		return os.ReadFile(sourcePath(env, name))
-	}, env.Device.Groups)
+	}, env.Device.Names())
 	if err != nil {
 		return nil, nil, conflict{fmt.Errorf("edited here, and its sources don't compile now: %w", err), false}
 	}
@@ -637,7 +637,7 @@ func track(env *core.Env, st *state, w want, content []byte) error {
 func build(env *core.Env, file string) (*compiled, error) {
 	return compile(file, func(name string) ([]byte, error) {
 		return os.ReadFile(sourcePath(env, name))
-	}, env.Device.Groups)
+	}, env.Device.Names())
 }
 
 // merge3 merges two edits of base, as git would. ok is false when they

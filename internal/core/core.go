@@ -1,6 +1,6 @@
 // Package core is what every module shares: the sync folder (~/lichen, a
 // git checkout of the user's sync repo, holding each module's config and
-// the synced sources), lichen.json (device groups and settings), and
+// the synced sources), lichen.toml (device groups and settings), and
 // which device this is. Modules never talk to each other: each reads its
 // own config from the sync folder after the core pulls it.
 package core
@@ -22,16 +22,15 @@ import (
 )
 
 // SettingsFile is the core's own config file in the sync folder.
-const SettingsFile = "lichen.json"
+const SettingsFile = "lichen.toml"
 
 type Settings struct {
 	// Groups names sets of devices, for scoping what goes where. Every
-	// device is also in a group named after itself and one named after
-	// its OS ("mac" or "linux").
-	Groups map[string][]string `json:"groups,omitempty"`
+	// device is also in the group named after its OS ("mac" or "linux").
+	Groups map[string][]string `toml:"groups,omitempty" json:"groups"`
 	// Backups keeps files lichen overwrites or deletes in
 	// ~/lichen-backups instead of removing them (see internal/backup).
-	Backups bool `json:"backups,omitempty"`
+	Backups bool `toml:"backups,omitempty" json:"backups"`
 }
 
 // Env is one run's view of this machine: the sync folder, this device,
@@ -66,12 +65,35 @@ func Load(lg *log.Logger) (*Env, error) {
 // Reload re-reads the settings, as after a pull or an edit to them.
 func (e *Env) Reload() error {
 	var s Settings
-	if _, err := config.ReadJSON(e.Path(SettingsFile), &s); err != nil {
+	// lichen 1.0's lichen.json, until a pass converts it.
+	legacy, err := config.ReadJSON(e.Path("lichen.json"), &s)
+	if err != nil {
 		return err
 	}
+	if !legacy {
+		if _, err := config.ReadTOML(e.Path(SettingsFile), &s); err != nil {
+			return err
+		}
+	}
 	e.Settings = s
-	e.Device.Groups = append([]string{e.Device.Name, osGroup()}, s.GroupsOf(e.Device.Name)...)
+	e.Device.Groups = append([]string{osGroup()}, s.GroupsOf(e.Device.Name)...)
 	return nil
+}
+
+// Unconverted reports whether a JSON config of lichen 1.0 is still in the
+// sync folder. It is the one in use, until a pass converts it.
+func (e *Env) Unconverted() bool {
+	return slices.ContainsFunc([]string{"lichen.json", "files.json", "skills.json", "mcp.json"}, func(f string) bool {
+		_, err := os.Stat(e.Path(f))
+		return err == nil
+	})
+}
+
+// ConvertSettings replaces lichen 1.0's lichen.json with lichen.toml.
+func (e *Env) ConvertSettings() error {
+	return config.ConvertJSON(e.Path("lichen.json"), func() error {
+		return config.WriteTOML(e.Path(SettingsFile), e.Settings)
+	})
 }
 
 // GroupsOf lists the custom groups a device is in, sorted.
@@ -100,6 +122,9 @@ func (e *Env) EditGroup(add bool, group string, devices []string) error {
 	if groups == nil {
 		groups = map[string][]string{}
 	}
+	if _, ok := groups[group]; !ok && !add {
+		return fmt.Errorf("%s is not a group (see: lichen groups)", group)
+	}
 	switch {
 	case add:
 		for _, d := range devices {
@@ -115,11 +140,11 @@ func (e *Env) EditGroup(add bool, group string, devices []string) error {
 			delete(groups, group)
 		}
 	}
-	var v any = groups
 	if len(groups) == 0 {
-		v = nil
+		groups = nil
 	}
-	return config.SetJSONField(e.Path(SettingsFile), "groups", v)
+	e.Settings.Groups = groups
+	return config.WriteTOML(e.Path(SettingsFile), e.Settings)
 }
 
 // Path resolves a path inside the sync folder.
@@ -130,16 +155,43 @@ func (e *Env) Path(parts ...string) string {
 // Device is this machine, as lichen scopes things to it.
 type Device struct {
 	Name   string
-	Groups []string // its own name, its OS, and every custom group it is in
+	Groups []string // its OS, and every custom group it is in
 }
 
-// In reports whether the device belongs to any of groups. No groups at
-// all means every device.
-func (d Device) In(groups []string) bool {
-	if len(groups) == 0 {
-		return true
+// Scope picks the devices something goes to, by device and group names:
+// the ones Include names, or all but the ones Exclude names. Never both,
+// and neither is every device.
+type Scope struct {
+	Include []string `toml:"include,omitempty" json:"include,omitempty"`
+	Exclude []string `toml:"exclude,omitempty" json:"exclude,omitempty"`
+}
+
+// Check refuses a scope that both includes and excludes.
+func (s Scope) Check() error {
+	if len(s.Include) > 0 && len(s.Exclude) > 0 {
+		return errors.New("use include or exclude, not both")
 	}
-	return slices.ContainsFunc(groups, func(g string) bool { return slices.Contains(d.Groups, g) })
+	return nil
+}
+
+// Everywhere reports whether the scope is every device.
+func (s Scope) Everywhere() bool { return len(s.Include) == 0 && len(s.Exclude) == 0 }
+
+// In reports whether the device is in scope.
+func (d Device) In(s Scope) bool {
+	if len(s.Include) > 0 {
+		return d.named(s.Include)
+	}
+	return !d.named(s.Exclude)
+}
+
+// Names lists what the device answers to in a scope: its name, then
+// its groups.
+func (d Device) Names() []string { return append([]string{d.Name}, d.Groups...) }
+
+// named reports whether any of names is the device or one of its groups.
+func (d Device) named(names []string) bool {
+	return slices.ContainsFunc(names, func(n string) bool { return n == d.Name || slices.Contains(d.Groups, n) })
 }
 
 func osGroup() string {
@@ -190,12 +242,16 @@ func nameFrom(host string) string {
 	return name
 }
 
-// Describe names a scope for people: "every device", or its groups.
-func Describe(groups []string) string {
-	if len(groups) == 0 {
-		return "every device"
+// Describe names a scope for people: "every device", the devices and
+// groups it includes, or "every device but" the ones it excludes.
+func Describe(s Scope) string {
+	switch {
+	case len(s.Include) > 0:
+		return strings.Join(s.Include, ", ")
+	case len(s.Exclude) > 0:
+		return "every device but " + strings.Join(s.Exclude, ", ")
 	}
-	return strings.Join(groups, ", ")
+	return "every device"
 }
 
 var groupName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)

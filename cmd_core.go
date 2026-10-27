@@ -31,7 +31,7 @@ import (
 
 func cmdSetup(args []string) error {
 	if len(args) > 1 {
-		return errors.New("usage: lichen setup [<git url>]")
+		return usage("setup", "")
 	}
 	url := ""
 	if len(args) == 1 {
@@ -113,7 +113,7 @@ func cmdStatus() error {
 		channel = paint("33", channel+": other devices' changes arrive with the hourly pass")
 	}
 	fmt.Printf("%s   %s\n", bold("events:"), channel)
-	fmt.Printf("%s   %s %s\n", bold("device:"), env.Device.Name, dim("("+core.Describe(env.Device.Groups[1:])+")"))
+	fmt.Printf("%s   %s %s\n", bold("device:"), env.Device.Name, dim("("+strings.Join(env.Device.Groups, ", ")+")"))
 	origin := env.Origin()
 	if origin == "" {
 		origin = paint("33", "no remote: not synced anywhere")
@@ -130,7 +130,7 @@ func cmdStatus() error {
 		here := 0
 		for _, e := range entries {
 			for _, o := range e.Outputs {
-				if env.Device.In(o.Only) {
+				if env.Device.In(o.Scope) {
 					here++
 				}
 			}
@@ -208,14 +208,50 @@ func cmdDevices() error {
 }
 
 func cmdGroups(args []string) error {
-	if len(args) < 2 || (args[0] != "add" && args[0] != "remove" && args[0] != "rm") || (args[0] == "add" && len(args) < 3) {
-		return errors.New("usage: lichen groups add <group> <device>...  or  lichen groups remove <group> [<device>...]")
+	if len(args) == 0 || args[0] == "list" || args[0] == "ls" {
+		return cmdGroupsList()
+	}
+	if (args[0] != "add" && args[0] != "remove" && args[0] != "rm") || len(args) < 2 || (args[0] == "add" && len(args) < 3) {
+		return usage("groups", "")
 	}
 	op, group, members := args[0], args[1], args[2:]
 	subject := strings.TrimSpace(fmt.Sprintf("groups: %s %s %s", op, group, strings.Join(members, " ")))
-	return change(subject, func(env *core.Env) error {
-		return env.EditGroup(op == "add", group, members)
-	})
+	var now []string
+	if err := change(subject, func(env *core.Env) error {
+		if err := env.EditGroup(op == "add", group, members); err != nil {
+			return err
+		}
+		now = env.Settings.Groups[group]
+		return nil
+	}); err != nil {
+		return err
+	}
+	if len(now) == 0 {
+		fmt.Printf("%s: deleted\n", group)
+	} else {
+		fmt.Printf("%s: %s\n", group, strings.Join(now, ", "))
+	}
+	return nil
+}
+
+func cmdGroupsList() error {
+	env, err := core.Load(clilog())
+	if err != nil {
+		return err
+	}
+	groups := env.Settings.Groups
+	if len(groups) == 0 {
+		fmt.Println("no groups (lichen groups add <group> <device>...)")
+	}
+	width := 0
+	for g := range groups {
+		width = max(width, len(g))
+	}
+	for _, g := range slices.Sorted(maps.Keys(groups)) {
+		fmt.Printf("%-*s  %s\n", width, g, strings.Join(groups[g], ", "))
+	}
+	fmt.Println(dim("built in: mac, linux"))
+	return nil
 }
 
 func cmdLogs() error {
@@ -256,7 +292,7 @@ func cmdDaemonCtl(action string) error {
 func cmdUninstall(args []string) error {
 	yes := len(args) == 1 && (args[0] == "--yes" || args[0] == "-y")
 	if len(args) > 0 && !yes {
-		return errors.New("usage: lichen uninstall [--yes]")
+		return usage("uninstall", "")
 	}
 	data, err := config.DataDir()
 	if err != nil {

@@ -14,8 +14,6 @@ import (
 	"lichen/internal/files"
 )
 
-const resolveUsage = "usage: lichen resolve [<path> [--keep here|synced] [--into <source>...]]"
-
 func cmdResolve(args []string) error {
 	var p, keep string
 	var into []string
@@ -32,13 +30,13 @@ func cmdResolve(args []string) error {
 			}
 		default:
 			if strings.HasPrefix(a, "-") || p != "" {
-				return errors.New(resolveUsage)
+				return usage("resolve", "")
 			}
 			p = a
 		}
 	}
 	if (p == "") != (keep == "" && into == nil) {
-		return errors.New(resolveUsage)
+		return usage("resolve", "")
 	}
 	if p != "" {
 		return resolve(p, keep, into)
@@ -50,7 +48,7 @@ func cmdResolve(args []string) error {
 		return nil
 	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return errors.New(resolveUsage)
+		return usage("resolve", "")
 	}
 	env, err := core.Load(clilog())
 	if err != nil {
