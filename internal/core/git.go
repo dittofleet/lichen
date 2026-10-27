@@ -247,9 +247,9 @@ func (e *Env) Push() error {
 
 // Setup creates this machine's sync folder: a clone of url, or with no
 // url a folder of its own, not synced anywhere until it gets an origin.
-// An empty repo is a first device, and gets lichen.json to mark it (and
+// An empty repo is a first device, and gets lichen.toml to mark it (and
 // a .gitignore, so editors' droppings in the folder never sync). A
-// repo with content but no lichen.json is not a sync repo (most likely
+// repo with content but no lichen.toml is not a sync repo (most likely
 // lichen's own source repo, passed by mistake) and is refused.
 func Setup(url string) (string, error) {
 	dir, err := config.SyncDir()
@@ -282,14 +282,16 @@ func Setup(url string) (string, error) {
 		return dir, err
 	}
 	settings := filepath.Join(dir, SettingsFile)
-	if _, err := os.Stat(settings); err == nil {
-		return dir, nil
+	for _, f := range []string{SettingsFile, "lichen.json"} { // lichen.json: lichen 1.0
+		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+			return dir, nil
+		}
 	}
 	if _, err := gitutil.Run(dir, "rev-parse", "--verify", "--quiet", "HEAD"); err == nil {
 		os.RemoveAll(dir)
 		return dir, fmt.Errorf("%s has files but no %s, so it is not a lichen sync repo (the sync repo is a separate, initially empty, private repo)", url, SettingsFile)
 	}
-	if err := config.WriteJSON(settings, map[string]any{}); err != nil {
+	if err := config.WriteFile(settings, nil, 0o644); err != nil {
 		return dir, err
 	}
 	return dir, config.WriteFile(filepath.Join(dir, ".gitignore"), []byte(config.GitIgnore), 0o644)

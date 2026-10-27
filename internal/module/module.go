@@ -61,7 +61,7 @@ func Pass(env *core.Env, pull bool) error {
 // Local is the pass for a change on this device, in the sync folder or
 // at one of the files module's outputs, which are all the daemon
 // watches. The files module runs, and the others only when their config
-// was edited by hand, or lichen.json (whose groups scope everything), as
+// was edited by hand, or lichen.toml (whose groups scope everything), as
 // they sync nothing local.
 func Local(env *core.Env) error {
 	if err := env.Gate(); err != nil {

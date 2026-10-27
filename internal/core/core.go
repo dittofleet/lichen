@@ -1,12 +1,11 @@
 // Package core is what every module shares: the sync folder (~/lichen, a
 // git checkout of the user's sync repo, holding each module's config and
-// the synced sources), lichen.json (device groups and settings), and
+// the synced sources), lichen.toml (device groups and settings), and
 // which device this is. Modules never talk to each other: each reads its
 // own config from the sync folder after the core pulls it.
 package core
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"log"
@@ -23,15 +22,15 @@ import (
 )
 
 // SettingsFile is the core's own config file in the sync folder.
-const SettingsFile = "lichen.json"
+const SettingsFile = "lichen.toml"
 
 type Settings struct {
 	// Groups names sets of devices, for scoping what goes where. Every
 	// device is also in the group named after its OS ("mac" or "linux").
-	Groups map[string][]string `json:"groups,omitempty"`
+	Groups map[string][]string `toml:"groups,omitempty" json:"groups"`
 	// Backups keeps files lichen overwrites or deletes in
 	// ~/lichen-backups instead of removing them (see internal/backup).
-	Backups bool `json:"backups,omitempty"`
+	Backups bool `toml:"backups,omitempty" json:"backups"`
 }
 
 // Env is one run's view of this machine: the sync folder, this device,
@@ -65,38 +64,16 @@ func Load(lg *log.Logger) (*Env, error) {
 
 // Reload re-reads the settings, as after a pull or an edit to them.
 func (e *Env) Reload() error {
-	if err := e.renameOnly(); err != nil {
+	err := config.FromJSON(e.Path("lichen.json"), e.Path(SettingsFile), func(s Settings) any { return s })
+	if err != nil {
 		return err
 	}
 	var s Settings
-	if _, err := config.ReadJSON(e.Path(SettingsFile), &s); err != nil {
+	if _, err := config.ReadTOML(e.Path(SettingsFile), &s); err != nil {
 		return err
 	}
 	e.Settings = s
 	e.Device.Groups = append([]string{osGroup()}, s.GroupsOf(e.Device.Name)...)
-	return nil
-}
-
-// renameOnly rewrites the "only" scopes of lichen 1.0 and earlier as
-// "include", in every config. The edit syncs with the version this
-// build records, so an older build pauses rather than reading it.
-// Remove once no sync folder holds an "only".
-func (e *Env) renameOnly() error {
-	paths, err := filepath.Glob(e.Path("*.json"))
-	if err != nil {
-		return err
-	}
-	for _, p := range paths {
-		b, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		if renamed := bytes.ReplaceAll(b, []byte(`"only":`), []byte(`"include":`)); !bytes.Equal(renamed, b) {
-			if err := os.WriteFile(p, renamed, 0o644); err != nil {
-				return err
-			}
-		}
-	}
 	return nil
 }
 
@@ -141,11 +118,12 @@ func (e *Env) EditGroup(add bool, group string, devices []string) error {
 			delete(groups, group)
 		}
 	}
-	var v any = groups
 	if len(groups) == 0 {
-		v = nil
+		groups = nil
 	}
-	return config.SetJSONField(e.Path(SettingsFile), "groups", v)
+	s := e.Settings
+	s.Groups = groups
+	return config.WriteTOML(e.Path(SettingsFile), s)
 }
 
 // Path resolves a path inside the sync folder.
@@ -163,8 +141,8 @@ type Device struct {
 // the ones Include names, or all but the ones Exclude names. Never both,
 // and neither is every device.
 type Scope struct {
-	Include []string `json:"include,omitempty"`
-	Exclude []string `json:"exclude,omitempty"`
+	Include []string `toml:"include,omitempty" json:"include,omitempty"`
+	Exclude []string `toml:"exclude,omitempty" json:"exclude,omitempty"`
 }
 
 // Everywhere reports whether the scope is every device.

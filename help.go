@@ -107,7 +107,7 @@ var help = []helpSection{
 				"to every device. Set it with --include or --exclude when adding, or with the " +
 				"module's include and exclude commands.\n\n" +
 				"mac and linux are built-in groups. Custom groups are stored in " +
-				"~/lichen/lichen.json and shared by all devices.",
+				"~/lichen/lichen.toml and shared by all devices.",
 			subs: []helpSub{
 				{"list", "groups [list]", "List groups and their devices", ""},
 				{"add", "groups add <group> <device>...", "Add devices to a group",

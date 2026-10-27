@@ -275,18 +275,40 @@ func TestScopes(t *testing.T) {
 	expect(t, b, ".zshrc", "apple only\n")
 }
 
-// Configs of lichen 1.0 scope with "only", read as "include".
-func TestOnlyRenamed(t *testing.T) {
+// lichen 1.0's JSON configs become TOML, their "only" scopes "include".
+func TestFromJSON(t *testing.T) {
 	remote := newRemote(t)
 	a := newDevice(t, remote, "apple")
-	a.write(".zshrc", "x\n")
-	a.add(".zshrc", "apple")
-	cfg := a.path("lichen/files.json")
-	b, _ := os.ReadFile(cfg)
-	os.WriteFile(cfg, []byte(strings.ReplaceAll(string(b), `"include":`, `"only":`)), 0o644)
-	a.env()
-	if b, _ := os.ReadFile(cfg); !strings.Contains(string(b), `"include": [`) || strings.Contains(string(b), `"only"`) {
-		t.Fatalf("files.json after loading:\n%s", b)
+	os.Remove(a.path("lichen/lichen.toml"))
+	a.write("lichen/lichen.json", `{"groups": {"fruit": ["apple", "banana"]}}`)
+	a.write("lichen/files.json", `{"sources": {
+		"zshrc": {"to": [{"path": "~/.zshrc", "only": ["mac"]}, {"path": "~/.bashrc"}]},
+		"netrc": {"to": [{"path": "~/.netrc"}], "private": true}
+	}}`)
+	env := a.env()
+	if _, err := files.List(env); err != nil {
+		t.Fatal(err)
+	}
+	for f, want := range map[string]string{
+		"lichen.toml": "[groups]\nfruit = [\"apple\", \"banana\"]\n",
+		"files.toml": `["~/.bashrc"]
+source = "zshrc"
+
+["~/.netrc"]
+private = true
+
+["~/.zshrc"]
+include = ["mac"]
+`,
+	} {
+		if b, _ := os.ReadFile(a.path("lichen/" + f)); string(b) != want {
+			t.Errorf("%s:\n%s\nwant:\n%s", f, b, want)
+		}
+	}
+	for _, f := range []string{"lichen.json", "files.json"} {
+		if a.has("lichen/" + f) {
+			t.Errorf("%s is still there", f)
+		}
 	}
 }
 
@@ -419,7 +441,7 @@ func TestEditorDroppingsDoNotSync(t *testing.T) {
 	}
 }
 
-// An output written into files.json by hand is held to what lichen
+// An output written into files.toml by hand is held to what lichen
 // files add allows: under the home directory, outside lichen's folders.
 func TestOutputsOutsideHomeAreIgnored(t *testing.T) {
 	remote := newRemote(t)
@@ -428,12 +450,14 @@ func TestOutputsOutsideHomeAreIgnored(t *testing.T) {
 	a.add(".zshrc")
 	outside := filepath.Join(filepath.Dir(a.home), "outside-"+filepath.Base(a.home))
 	t.Cleanup(func() { os.Remove(outside) })
-	a.write("lichen/files.json", `{"sources": {"zshrc": {"to": [
-		{"path": "~/.zshrc"},
-		{"path": "~/../`+filepath.Base(outside)+`"},
-		{"path": "~/lichen/zshrc"},
-		{"path": "relative/zshrc"}
-	]}}}`)
+	a.write("lichen/files.toml", `["~/.zshrc"]
+["~/../`+filepath.Base(outside)+`"]
+source = "zshrc"
+["~/lichen/zshrc"]
+source = "zshrc"
+["relative/zshrc"]
+source = "zshrc"
+`)
 	a.sync()
 	expect(t, a, ".zshrc", "z\n")
 	for _, p := range []string{outside, a.path("lichen/zshrc"), a.path("relative/zshrc")} {
@@ -681,7 +705,7 @@ func TestOverlappingAddsAreRefused(t *testing.T) {
 	a.write(".claude/commands/one.md", "1")
 	a.add(".claude/commands")
 	env := a.env()
-	for _, p := range []string{"~/.claude/commands/one.md", "~/.claude", "~/lichen/files.json"} {
+	for _, p := range []string{"~/.claude/commands/one.md", "~/.claude", "~/lichen/files.toml"} {
 		if _, err := files.Add(env, []string{p}, "", core.Scope{}); err == nil {
 			t.Errorf("adding %s: expected a refusal", p)
 		}

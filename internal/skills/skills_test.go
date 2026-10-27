@@ -226,7 +226,7 @@ func TestRun(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	writeConfig(`{"sources":[{"repo":"me/skills"}],"harnesses":["~/.claude/skills","~/.codex/skills"]}`)
+	writeConfig("harnesses = [\"~/.claude/skills\", \"~/.codex/skills\"]\n[\"me/skills\"]\n")
 	quiet := log.New(io.Discard, "", 0)
 	pass := func() {
 		t.Helper()
@@ -306,7 +306,7 @@ func TestRun(t *testing.T) {
 	expect(filepath.Join(agents, "only"), false)
 
 	// Removal cleans up the private copy and its link.
-	writeConfig(`{"sources":[{"repo":"me/skills","skills":["both"]}],"harnesses":["~/.claude/skills","~/.codex/skills"]}`)
+	writeConfig("harnesses = [\"~/.claude/skills\", \"~/.codex/skills\"]\n[\"me/skills\"]\nskills = [\"both\"]\n")
 	pass()
 	expect(filepath.Join(private, "only"), false)
 	expect(filepath.Join(codex, "only"), false)
@@ -354,7 +354,7 @@ func TestRun(t *testing.T) {
 
 	// An entry this build can't parse holds removals back, but not one
 	// for other devices.
-	writeConfig(`{"sources":[{"repo":"me/skills","include":["linux"]},{"repo":"not a spec","include":["linux"]}],"harnesses":["~/.claude/skills","~/.codex/skills"]}`)
+	writeConfig("harnesses = [\"~/.claude/skills\", \"~/.codex/skills\"]\n[\"me/skills\"]\ninclude = [\"linux\"]\n[\"not a spec\"]\ninclude = [\"linux\"]\n")
 	pass()
 	expect(filepath.Join(agents, "both"), false)
 }

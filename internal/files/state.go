@@ -13,7 +13,7 @@ import (
 
 // record is what lichen last wrote to one output file on this device.
 type record struct {
-	Source string `json:"source"` // files.json entry
+	Source string `json:"source"` // files.toml source
 	File   string `json:"file"`   // source file, relative to files/
 	Root   string `json:"root"`   // the output: this file, or its synced directory
 	Hash   string `json:"hash"`   // of the content lichen wrote

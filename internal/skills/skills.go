@@ -7,13 +7,14 @@
 // limited to some harnesses (metadata.lichen-harnesses) lives in lichen's
 // private store instead, since some harnesses read ~/.agents/skills. WHICH
 // repos to sync and which harnesses to link live in this module's own
-// config file (skills.json in the sync folder). Clones and install
+// config file (skills.toml in the sync folder). Clones and install
 // bookkeeping stay machine-local. Only skills recorded in the local manifest are ever
 // touched, so skills installed by other means (npx skills, a manual
 // copy) always coexist with lichen's.
 package skills
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -25,13 +26,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
+
 	"lichen/internal/config"
 	"lichen/internal/core"
 	"lichen/internal/gitutil"
 )
 
 // ConfigFile is the module's config in the sync folder.
-const ConfigFile = "skills.json"
+const ConfigFile = "skills.toml"
 
 // ConfigPath is where the module's config lives.
 func ConfigPath() (string, error) { return config.SyncPath(ConfigFile) }
@@ -68,18 +71,19 @@ func claudeSkillsDir() (string, error) {
 // devices in its scope. Empty Skills means every skill the repo
 // publishes.
 type Source struct {
-	Repo   string   `json:"repo"`
-	Skills []string `json:"skills,omitempty"`
+	Repo   string   `toml:"-"` // its key in skills.toml
+	Skills []string `toml:"skills,omitempty"`
 	core.Scope
 }
 
-// skillsConfig is the synced skills config file. Harnesses lists the
-// directories that get a per-skill symlink to the canonical copy, in ~/
-// form (the file travels between machines). Absent means Claude Code's
+// skillsConfig is the synced skills config file: Harnesses, then a
+// table per source, keyed by its repo. Harnesses lists the directories
+// that get a per-skill symlink to the canonical copy, in ~/ form (the
+// file travels between machines). Absent means Claude Code's
 // ~/.claude/skills. Hand-edited for now: lichen has no CLI for it.
 type skillsConfig struct {
-	Sources   []Source `json:"sources"`
-	Harnesses []string `json:"harnesses,omitempty"`
+	Sources   []Source
+	Harnesses []string
 }
 
 // loadConfig reads the synced skills config. The exists flag lets the
@@ -90,11 +94,60 @@ func loadConfig() (cfg *skillsConfig, exists bool, err error) {
 	if err != nil {
 		return nil, false, err
 	}
-	cfg = &skillsConfig{}
-	if exists, err = config.ReadJSON(p, cfg); err != nil {
-		return nil, exists, err
+	err = config.FromJSON(filepath.Join(filepath.Dir(p), "skills.json"), p, func(old struct {
+		Sources []struct {
+			Repo   string   `json:"repo"`
+			Skills []string `json:"skills"`
+			Only   []string `json:"only"`
+		} `json:"sources"`
+		Harnesses []string `json:"harnesses"`
+	}) any {
+		c := skillsConfig{Harnesses: old.Harnesses}
+		for _, s := range old.Sources {
+			c.Sources = append(c.Sources, Source{Repo: s.Repo, Skills: s.Skills, Scope: core.Scope{Include: s.Only}})
+		}
+		return c.file()
+	})
+	if err != nil {
+		return nil, false, err
 	}
-	return cfg, exists, nil
+	var raw map[string]toml.Primitive
+	md, err := toml.DecodeFile(p, &raw)
+	if errors.Is(err, fs.ErrNotExist) {
+		return &skillsConfig{}, false, nil
+	}
+	if err != nil {
+		return nil, true, fmt.Errorf("parsing %s: %w", p, err)
+	}
+	cfg = &skillsConfig{}
+	for _, key := range slices.Sorted(maps.Keys(raw)) {
+		if key == "harnesses" {
+			err = md.PrimitiveDecode(raw[key], &cfg.Harnesses)
+		} else {
+			src := Source{Repo: key}
+			err = md.PrimitiveDecode(raw[key], &src)
+			cfg.Sources = append(cfg.Sources, src)
+		}
+		if err != nil {
+			return nil, true, fmt.Errorf("parsing %s: %s: %w", p, key, err)
+		}
+	}
+	if u := md.Undecoded(); len(u) > 0 {
+		return nil, true, fmt.Errorf("parsing %s: unknown key %s", p, u[0])
+	}
+	return cfg, true, nil
+}
+
+// file lays the config out as skills.toml does.
+func (c *skillsConfig) file() map[string]any {
+	f := map[string]any{}
+	if len(c.Harnesses) > 0 {
+		f["harnesses"] = c.Harnesses
+	}
+	for _, src := range c.Sources {
+		f[src.Repo] = src
+	}
+	return f
 }
 
 func loadSources() ([]Source, error) {
@@ -131,19 +184,18 @@ func (c *skillsConfig) harnessDirs(lg *log.Logger) []string {
 	return dirs
 }
 
-// saveSources rewrites the sources list inside skills.json, keeping any
-// top-level field this build doesn't know about: the file is shared by
-// machines that may run different lichen versions.
+// saveSources rewrites the sources in skills.toml.
 func saveSources(sources []Source) error {
+	cfg, _, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	cfg.Sources = sources
 	p, err := ConfigPath()
 	if err != nil {
 		return err
 	}
-	if len(sources) == 0 {
-		// The file stays, just with no sources.
-		return config.SetJSONField(p, "sources", nil)
-	}
-	return config.SetJSONField(p, "sources", sources)
+	return config.WriteTOML(p, cfg.file())
 }
 
 // The manifest records what THIS machine has installed and from where.
@@ -624,11 +676,11 @@ func run(env *core.Env, force bool) error {
 	if len(sources) == 0 && len(man.Skills) == 0 && len(man.Repos) == 0 {
 		return nil
 	}
-	// An absent skills.json is not "zero sources": a sync folder that
+	// An absent skills.toml is not "zero sources": a sync folder that
 	// lost it (a bad merge, a hand deletion) must not turn into a mass
 	// uninstall. Removing every source keeps the file, empty.
 	if !exists && len(man.Skills) > 0 {
-		lg.Printf("skills: no skills.json yet, leaving installed skills alone")
+		lg.Printf("skills: no skills.toml yet, leaving installed skills alone")
 		return nil
 	}
 	harnesses := scfg.harnessDirs(lg)

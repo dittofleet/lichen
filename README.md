@@ -43,11 +43,22 @@ later, if you skip the question.
 
 ```
 ~/lichen/
-  lichen.json   device groups and settings
-  files.json    where each file goes
-  skills.json
-  mcp.json
+  lichen.toml   device groups and settings
+  files.toml    where each file goes
+  skills.toml
+  mcp.toml
   files/        the files themselves
+```
+
+The configs have one entry per output, repo or server:
+
+```toml
+# files.toml
+["~/.zshrc"]
+include = ["mac"]
+
+["~/.codex/AGENTS.md"]
+source = "claude/CLAUDE.md"   # only when not named after the path
 ```
 
 Edit anything in it and lichen commits and pushes it. You never run git
@@ -70,7 +81,7 @@ Skills and MCP servers work the same way, and [inserts](#inserts) use
 plain files and uninstalls its skills and servers.
 
 `lichen devices` lists device names (crosstalk's). `mac` and `linux` are
-built-in groups. Custom groups are stored in `~/lichen/lichen.json`:
+built-in groups. Custom groups are stored in `~/lichen/lichen.toml`:
 
 ```sh
 lichen groups add servers hetzner-1 hetzner-2
@@ -169,11 +180,11 @@ Off by default. When a synced version replaces a device's own copy, or a
 file deleted elsewhere is deleted here, the old one is gone. A directory
 in the way is the exception: it may hold files that were never synced, so
 it is always moved to `~/lichen-backups/`. To keep replaced and deleted
-files there as well, set `backups` in `~/lichen/lichen.json` (it syncs, so
+files there as well, set `backups` in `~/lichen/lichen.toml` (it syncs, so
 this turns backups on for every device):
 
-```json
-{ "backups": true }
+```toml
+backups = true
 ```
 
 ## Skills
@@ -193,8 +204,8 @@ creates, so Claude Code picks the skill up globally and both tools
 coexist: lichen never touches a skill it didn't install. Other harnesses
 get links too by listing their skill directories in the skills config:
 
-```json
-{ "harnesses": ["~/.claude/skills", "~/.codex/skills"] }
+```toml
+harnesses = ["~/.claude/skills", "~/.codex/skills"]
 ```
 
 A skill can limit itself to some harnesses with a comma-separated
@@ -216,7 +227,7 @@ limited skill's canonical copy lives in `~/.local/share/lichen/skills`
 instead, reachable only through the listed harnesses' links. List
 `agents` to keep it in `~/.agents/skills`.
 
-The list of skill repos lives in `~/lichen/skills.json`, so adding a skill
+The list of skill repos lives in `~/lichen/skills.toml`, so adding a skill
 on one device installs it everywhere, and removing one uninstalls it
 everywhere. The
 daemon polls each repo about hourly, and a repo moving only reinstalls
@@ -249,7 +260,7 @@ already use in a harness is left alone there. A lichen server deleted by
 hand comes back on the next pass, so remove it with `lichen mcp remove`
 instead. Running sessions pick up changes after a restart.
 
-The list of servers lives in `~/lichen/mcp.json`, so adding a server on
+The list of servers lives in `~/lichen/mcp.toml`, so adding a server on
 one device installs it everywhere, and removing one uninstalls it
 everywhere. A server can be [scoped](#which-devices-get-what):
 

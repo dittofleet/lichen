@@ -4,7 +4,7 @@
 // writer of its config file. A server is just a name and either a
 // command to launch or a URL to reach: no env vars, headers or auth, so
 // nothing secret ever enters the synced config. WHICH servers to install
-// lives in this module's own config file (mcp.json in the sync folder).
+// lives in this module's own config file (mcp.toml in the sync folder).
 // What this machine installed where lives in a local manifest, the
 // ownership boundary:
 // lichen only ever replaces or removes servers it added itself, so
@@ -24,7 +24,7 @@ import (
 )
 
 // ConfigFile is the module's config in the sync folder.
-const ConfigFile = "mcp.json"
+const ConfigFile = "mcp.toml"
 
 // ConfigPath is where the module's config lives.
 func ConfigPath() (string, error) { return config.SyncPath(ConfigFile) }
@@ -40,9 +40,9 @@ func (Module) Reconcile(env *core.Env) error { return Reconcile(env) }
 // Server is one MCP server: a local one lichen launches through Command
 // and Args, or a remote one reachable at URL.
 type Server struct {
-	Command string   `json:"command,omitempty"`
-	Args    []string `json:"args,omitempty"`
-	URL     string   `json:"url,omitempty"`
+	Command string   `toml:"command,omitempty" json:"command,omitempty"`
+	Args    []string `toml:"args,omitempty" json:"args,omitempty"`
+	URL     string   `toml:"url,omitempty" json:"url,omitempty"`
 	core.Scope
 }
 
@@ -88,7 +88,7 @@ func validate(name string, s Server) error {
 
 // mcpConfig is the synced mcp config file.
 type mcpConfig struct {
-	Servers map[string]Server `json:"servers,omitempty"`
+	Servers map[string]Server
 }
 
 // loadConfig reads the synced mcp config. The exists flag lets the
@@ -99,27 +99,36 @@ func loadConfig() (cfg *mcpConfig, exists bool, err error) {
 	if err != nil {
 		return nil, false, err
 	}
-	cfg = &mcpConfig{}
-	if exists, err = config.ReadJSON(p, cfg); err != nil {
-		return nil, exists, err
+	err = config.FromJSON(filepath.Join(filepath.Dir(p), "mcp.json"), p, func(old struct {
+		Servers map[string]struct {
+			Server
+			Only []string `json:"only"`
+		} `json:"servers"`
+	}) any {
+		servers := map[string]Server{}
+		for name, s := range old.Servers {
+			s.Server.Scope = core.Scope{Include: s.Only}
+			servers[name] = s.Server
+		}
+		return servers
+	})
+	if err != nil {
+		return nil, false, err
 	}
-	if cfg.Servers == nil {
-		cfg.Servers = map[string]Server{}
+	cfg = &mcpConfig{Servers: map[string]Server{}}
+	if exists, err = config.ReadTOML(p, &cfg.Servers); err != nil {
+		return nil, exists, err
 	}
 	return cfg, exists, nil
 }
 
-// saveServers rewrites the servers map inside mcp.json.
+// saveServers rewrites mcp.toml.
 func saveServers(servers map[string]Server) error {
 	p, err := ConfigPath()
 	if err != nil {
 		return err
 	}
-	if len(servers) == 0 {
-		// The file stays, just with no servers.
-		return config.SetJSONField(p, "servers", nil)
-	}
-	return config.SetJSONField(p, "servers", servers)
+	return config.WriteTOML(p, servers)
 }
 
 // The manifest records what THIS machine installed into which harness:
@@ -197,11 +206,11 @@ func Reconcile(env *core.Env) error {
 	if len(cfg.Servers) == 0 && len(man.Servers) == 0 {
 		return nil
 	}
-	// An absent mcp.json is not "zero servers": a sync folder that lost
+	// An absent mcp.toml is not "zero servers": a sync folder that lost
 	// it (a bad merge, a hand deletion) must not turn into a mass
 	// uninstall. Removing every server keeps the file, empty.
 	if !exists && len(man.Servers) > 0 {
-		lg.Printf("mcp: no mcp.json yet, leaving installed servers alone")
+		lg.Printf("mcp: no mcp.toml yet, leaving installed servers alone")
 		return nil
 	}
 

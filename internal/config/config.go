@@ -1,7 +1,8 @@
 // Package config resolves where lichen keeps things on this machine: the
 // sync folder (~/lichen, the git checkout every module's config and every
 // synced source lives in), machine-local state, and the daemon log. It
-// also holds the JSON helpers the modules share for their config files.
+// also holds the TOML helpers for the sync folder's configs, and the JSON
+// ones for machine-local state.
 package config
 
 import (
@@ -13,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/BurntSushi/toml"
 	"github.com/dittofleet/go-cli-kit/xdg"
 )
 
@@ -145,25 +147,52 @@ func ReadJSON(path string, v any) (exists bool, err error) {
 	return true, nil
 }
 
-// SetJSONField rewrites one top-level field of the JSON object at path,
-// keeping every other field, including ones this build doesn't know
-// about: lichen's config files are shared by machines that may run
-// different lichen versions. A nil v deletes the field.
-func SetJSONField(path, key string, v any) error {
-	raw := map[string]json.RawMessage{}
-	if _, err := ReadJSON(path, &raw); err != nil {
+// ReadTOML decodes the TOML file at path into v, refusing keys v has no
+// place for: a misspelled scope would otherwise go to every device. A
+// missing file is not an error: exists reports it, and v is left
+// untouched.
+func ReadTOML(path string, v any) (exists bool, err error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	md, err := toml.Decode(string(data), v)
+	if err != nil {
+		return true, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	if u := md.Undecoded(); len(u) > 0 {
+		return true, fmt.Errorf("parsing %s: unknown key %s", path, u[0])
+	}
+	return true, nil
+}
+
+// WriteTOML writes v as TOML.
+func WriteTOML(path string, v any) error {
+	var b bytes.Buffer
+	enc := toml.NewEncoder(&b)
+	enc.Indent = ""
+	if err := enc.Encode(v); err != nil {
 		return err
 	}
-	if v == nil {
-		delete(raw, key)
-	} else {
-		enc, err := json.Marshal(v)
-		if err != nil {
-			return err
-		}
-		raw[key] = enc
+	return WriteFile(path, b.Bytes(), 0o644)
+}
+
+// FromJSON converts the JSON config lichen 1.0 kept at jsonPath to the
+// TOML convert makes of it, at tomlPath. Without a JSON file it does
+// nothing. Remove once no sync folder holds one.
+func FromJSON[T any](jsonPath, tomlPath string, convert func(T) any) error {
+	var old T
+	exists, err := ReadJSON(jsonPath, &old)
+	if err != nil || !exists {
+		return err
 	}
-	return WriteJSON(path, raw)
+	if err := WriteTOML(tomlPath, convert(old)); err != nil {
+		return err
+	}
+	return os.Remove(jsonPath)
 }
 
 // WriteJSON writes v as pretty JSON.

@@ -193,24 +193,24 @@ func TestReconcile(t *testing.T) {
 
 	// A config entry this build rejects keeps its installs.
 	p, _ := ConfigPath()
-	if err := os.WriteFile(p, []byte(`{"servers":{"pw":{}}}`), 0o644); err != nil {
+	if err := os.WriteFile(p, []byte("[pw]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	reconcile()
 	expect(claude)
 	expect(codex)
 
-	// Neither is an mcp.json holding a bare null.
-	if err := os.WriteFile(p, []byte("null\n"), 0o644); err != nil {
+	// Neither is an mcp.toml that doesn't parse.
+	if err := os.WriteFile(p, []byte("[pw\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := Reconcile(env); err == nil {
-		t.Error("null mcp.json: expected an error")
+		t.Error("broken mcp.toml: expected an error")
 	}
 	expect(claude)
 	expect(codex)
 
-	// No mcp.json at all is not "remove everything".
+	// No mcp.toml at all is not "remove everything".
 	if err := os.Remove(p); err != nil {
 		t.Fatal(err)
 	}

@@ -1,5 +1,5 @@
 // Package files is lichen's files module. A source is a file or directory
-// in the sync folder's files/ directory, and files.json says where each
+// in the sync folder's files/ directory, and files.toml says where each
 // one goes: its outputs, each a path plus the devices it is for. A source
 // file can insert others (see compile.go). Every device writes the
 // outputs meant for it, and an edit to an output is captured back into
@@ -10,6 +10,7 @@
 package files
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"log"
@@ -27,7 +28,7 @@ import (
 
 const (
 	// ConfigFile is the module's config in the sync folder.
-	ConfigFile = "files.json"
+	ConfigFile = "files.toml"
 	// SourcesDir holds the sources, inside the sync folder.
 	SourcesDir = "files"
 	// deletedFile records sources deleted (as opposed to no longer
@@ -41,7 +42,7 @@ type Output struct {
 	core.Scope
 }
 
-// Source is one entry of files.json, keyed by its path under files/.
+// Source is one source and its outputs, keyed by its path under files/.
 type Source struct {
 	To []Output `json:"to"`
 	// Private sources hold a file no one but its owner may read
@@ -50,25 +51,91 @@ type Source struct {
 }
 
 type fileConfig struct {
-	Sources map[string]Source `json:"sources,omitempty"`
+	Sources map[string]Source
+}
+
+// entry is one output in files.toml, keyed by its path.
+type entry struct {
+	// Source is left out when it is the one the path names (sourceName).
+	Source string `toml:"source,omitempty"`
+	core.Scope
+	Private bool `toml:"private,omitempty"`
 }
 
 func loadConfig(env *core.Env) (*fileConfig, error) {
-	c := &fileConfig{}
-	if _, err := config.ReadJSON(env.Path(ConfigFile), c); err != nil {
+	if err := fromJSON(env); err != nil {
 		return nil, err
 	}
-	if c.Sources == nil {
-		c.Sources = map[string]Source{}
+	entries := map[string]entry{}
+	if _, err := config.ReadTOML(env.Path(ConfigFile), &entries); err != nil {
+		return nil, err
+	}
+	c := &fileConfig{Sources: map[string]Source{}}
+	for _, p := range slices.Sorted(maps.Keys(entries)) {
+		e := entries[p]
+		n := e.Source
+		if n == "" {
+			n = sourceName(p)
+		}
+		s := c.Sources[n]
+		s.To = append(s.To, Output{Path: p, Scope: e.Scope})
+		s.Private = s.Private || e.Private
+		c.Sources[n] = s
 	}
 	return c, nil
 }
 
 func (c *fileConfig) save(env *core.Env) error {
-	if len(c.Sources) == 0 {
-		return config.SetJSONField(env.Path(ConfigFile), "sources", nil)
+	return config.WriteTOML(env.Path(ConfigFile), c.entries())
+}
+
+// entries lays the sources out as files.toml does: one entry per output.
+func (c *fileConfig) entries() map[string]entry {
+	entries := map[string]entry{}
+	for n, s := range c.Sources {
+		for _, o := range s.To {
+			e := entry{Scope: o.Scope, Private: s.Private}
+			if n != sourceName(o.Path) {
+				e.Source = n
+			}
+			entries[o.Path] = e
+		}
 	}
-	return config.SetJSONField(env.Path(ConfigFile), "sources", c.Sources)
+	return entries
+}
+
+// fromJSON converts lichen 1.0's files.json, and the "only" scopes in
+// its record of deleted sources. Remove with config.FromJSON.
+func fromJSON(env *core.Env) error {
+	type output struct {
+		Path string   `json:"path"`
+		Only []string `json:"only"`
+	}
+	type old struct {
+		Sources map[string]struct {
+			To      []output `json:"to"`
+			Private bool     `json:"private"`
+		} `json:"sources"`
+	}
+	err := config.FromJSON(env.Path("files.json"), env.Path(ConfigFile), func(o old) any {
+		c := fileConfig{Sources: map[string]Source{}}
+		for n, s := range o.Sources {
+			src := Source{Private: s.Private}
+			for _, out := range s.To {
+				src.To = append(src.To, Output{Path: out.Path, Scope: core.Scope{Include: out.Only}})
+			}
+			c.Sources[n] = src
+		}
+		return c.entries()
+	})
+	if err != nil {
+		return err
+	}
+	b, err := os.ReadFile(env.Path(deletedFile))
+	if err != nil || !bytes.Contains(b, []byte(`"only":`)) {
+		return nil
+	}
+	return os.WriteFile(env.Path(deletedFile), bytes.ReplaceAll(b, []byte(`"only":`), []byte(`"include":`)), 0o644)
 }
 
 // loadDeleted reads the deleted sources, each with the entry it had, for
@@ -180,7 +247,7 @@ func checkOutput(env *core.Env, abs string) error {
 
 // want is one output file this device should have.
 type want struct {
-	source string // files.json entry
+	source string // files.toml source
 	file   string // the source file, relative to files/
 	path   string // absolute output file
 	root   string // absolute output: the file itself, or the output directory
