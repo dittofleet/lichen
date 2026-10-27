@@ -81,6 +81,9 @@ func cmdPostinstall() error {
 			}
 			return service.Install(binary)
 		}
+		if _, err := core.DeviceName(); err != nil {
+			return err
+		}
 		url := os.Getenv("LICHEN_REPO")
 		if url == "" && term.IsTerminal(int(os.Stdin.Fd())) {
 			url = prompt(bufio.NewReader(os.Stdin), "Sync repo git URL (an empty private repo for your first device, empty to set up later): ")

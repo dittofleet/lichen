@@ -206,10 +206,12 @@ func DeviceName() (string, error) {
 		return name, nil
 	} else if b, _ := os.ReadFile(cache); strings.TrimSpace(string(b)) != "" {
 		return strings.TrimSpace(string(b)), nil
+	} else if errors.Is(err, events.ErrNotRunning) {
+		return "", errors.New("crosstalk is required, installed and joined to your hub: https://github.com/dittofleet/crosstalk")
 	} else if err == nil {
-		err = errors.New("crosstalk named no device")
+		err = errors.New("it named no device")
 	}
-	return "", fmt.Errorf("lichen needs crosstalk, installed and joined to your hub (https://github.com/dittofleet/crosstalk): %w", err)
+	return "", fmt.Errorf("lichen names this device the way crosstalk does, and crosstalk can't say yet: %w", err)
 }
 
 // Describe names a scope for people: "every device", the devices and
