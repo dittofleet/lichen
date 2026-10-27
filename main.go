@@ -139,9 +139,9 @@ func change(subject string, edit func(env *core.Env) error) error {
 // cmdScope runs `<module> include|exclude <thing> [<device|group>...]`,
 // scoping the thing through set. Excluding nothing is every device
 // again.
-func cmdScope(module, placeholder string, args []string, set func(env *core.Env, thing string, scope core.Scope) error) error {
+func cmdScope(module string, args []string, set func(env *core.Env, thing string, scope core.Scope) error) error {
 	if len(args) < 2 || (args[0] == "include" && len(args) < 3) {
-		return fmt.Errorf("usage: lichen %[1]s include %[2]s <device|group>...  or  lichen %[1]s exclude %[2]s [<device|group>...]", module, placeholder)
+		return usage(module, args[0])
 	}
 	thing, names := args[1], args[2:]
 	for _, n := range names {
@@ -153,11 +153,7 @@ func cmdScope(module, placeholder string, args []string, set func(env *core.Env,
 	if args[0] == "include" {
 		scope = core.Scope{Include: names}
 	}
-	what := module + ": " + thing
-	if module == "files" {
-		what = targets(thing)
-	}
-	msg := fmt.Sprintf("%s goes to %s", what, core.Describe(scope))
+	msg := fmt.Sprintf("%s: %s goes to %s", module, targets(thing), core.Describe(scope))
 	if err := change(msg, func(env *core.Env) error { return set(env, thing, scope) }); err != nil {
 		return err
 	}

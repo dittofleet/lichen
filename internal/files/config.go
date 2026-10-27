@@ -117,7 +117,9 @@ func fromJSON(env *core.Env) error {
 			Private bool     `json:"private"`
 		} `json:"sources"`
 	}
+	var deleted []byte
 	err := config.FromJSON(env.Path("files.json"), env.Path(ConfigFile), func(o old) any {
+		deleted, _ = os.ReadFile(env.Path(deletedFile))
 		c := fileConfig{Sources: map[string]Source{}}
 		for n, s := range o.Sources {
 			src := Source{Private: s.Private}
@@ -128,14 +130,10 @@ func fromJSON(env *core.Env) error {
 		}
 		return c.entries()
 	})
-	if err != nil {
+	if err != nil || deleted == nil {
 		return err
 	}
-	b, err := os.ReadFile(env.Path(deletedFile))
-	if err != nil || !bytes.Contains(b, []byte(`"only":`)) {
-		return nil
-	}
-	return os.WriteFile(env.Path(deletedFile), bytes.ReplaceAll(b, []byte(`"only":`), []byte(`"include":`)), 0o644)
+	return config.WriteFile(env.Path(deletedFile), bytes.ReplaceAll(deleted, []byte(`"only":`), []byte(`"include":`)), 0o644)
 }
 
 // loadDeleted reads the deleted sources, each with the entry it had, for

@@ -99,7 +99,11 @@ func loadConfig() (cfg *mcpConfig, exists bool, err error) {
 	if err != nil {
 		return nil, false, err
 	}
-	err = config.FromJSON(filepath.Join(filepath.Dir(p), "mcp.json"), p, func(old struct {
+	old, err := config.SyncPath("mcp.json")
+	if err != nil {
+		return nil, false, err
+	}
+	err = config.FromJSON(old, p, func(old struct {
 		Servers map[string]struct {
 			Server
 			Only []string `json:"only"`

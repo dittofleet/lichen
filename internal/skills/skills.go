@@ -14,7 +14,6 @@
 package skills
 
 import (
-	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -94,7 +93,11 @@ func loadConfig() (cfg *skillsConfig, exists bool, err error) {
 	if err != nil {
 		return nil, false, err
 	}
-	err = config.FromJSON(filepath.Join(filepath.Dir(p), "skills.json"), p, func(old struct {
+	old, err := config.SyncPath("skills.json")
+	if err != nil {
+		return nil, false, err
+	}
+	err = config.FromJSON(old, p, func(old struct {
 		Sources []struct {
 			Repo   string   `json:"repo"`
 			Skills []string `json:"skills"`
@@ -111,31 +114,28 @@ func loadConfig() (cfg *skillsConfig, exists bool, err error) {
 	if err != nil {
 		return nil, false, err
 	}
-	var raw map[string]toml.Primitive
-	md, err := toml.DecodeFile(p, &raw)
-	if errors.Is(err, fs.ErrNotExist) {
-		return &skillsConfig{}, false, nil
-	}
-	if err != nil {
-		return nil, true, fmt.Errorf("parsing %s: %w", config.ContractHome(p), err)
-	}
 	cfg = &skillsConfig{}
-	for _, key := range slices.Sorted(maps.Keys(raw)) {
-		if key == "harnesses" {
-			err = md.PrimitiveDecode(raw[key], &cfg.Harnesses)
-		} else {
-			src := Source{Repo: key}
-			err = md.PrimitiveDecode(raw[key], &src)
-			cfg.Sources = append(cfg.Sources, src)
+	var raw map[string]toml.Primitive
+	exists, err = config.DecodeTOML(p, &raw, func(md toml.MetaData) error {
+		for _, key := range slices.Sorted(maps.Keys(raw)) {
+			var err error
+			if key == "harnesses" {
+				err = md.PrimitiveDecode(raw[key], &cfg.Harnesses)
+			} else {
+				src := Source{Repo: key}
+				err = md.PrimitiveDecode(raw[key], &src)
+				cfg.Sources = append(cfg.Sources, src)
+			}
+			if err != nil {
+				return fmt.Errorf("%s: %w", key, err)
+			}
 		}
-		if err != nil {
-			return nil, true, fmt.Errorf("parsing %s: %s: %w", config.ContractHome(p), key, err)
-		}
+		return nil
+	})
+	if err != nil {
+		return nil, exists, err
 	}
-	if u := md.Undecoded(); len(u) > 0 {
-		return nil, true, fmt.Errorf("parsing %s: unknown key %s", config.ContractHome(p), u[0])
-	}
-	return cfg, true, nil
+	return cfg, exists, nil
 }
 
 // file lays the config out as skills.toml does.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -88,7 +89,7 @@ var help = []helpSection{
 		},
 		{
 			name:    "resolve",
-			usage:   "resolve [<path> --keep here|synced | --into <source>]",
+			usage:   "resolve [<path> [--keep here|synced] [--into <source>]...]",
 			summary: "Settle held edits",
 			about: "An edit is held when it conflicts with another device's, or adds lines where " +
 				"an insert begins or ends. With no arguments, steps through each held edit. " +
@@ -163,12 +164,7 @@ func printHelp(topic []string) error {
 		commandPage(c)
 		return nil
 	}
-	var forms []helpSub
-	for _, s := range c.subs {
-		if s.name == alias(map[string]string{"rm": "remove", "ls": "list"}, topic[1]) {
-			forms = append(forms, s)
-		}
-	}
+	forms := c.forms(alias(map[string]string{"rm": "remove", "ls": "list"}, topic[1]))
 	if len(forms) == 0 {
 		return fmt.Errorf("no help for %q (see: lichen help %s)", strings.Join(topic, " "), c.name)
 	}
@@ -182,6 +178,32 @@ func printHelp(topic []string) error {
 		}
 	}
 	return nil
+}
+
+// forms lists the subcommand forms named sub, or all of them without one.
+func (c helpCmd) forms(sub string) []helpSub {
+	var forms []helpSub
+	for _, s := range c.subs {
+		if sub == "" || s.name == sub {
+			forms = append(forms, s)
+		}
+	}
+	return forms
+}
+
+// usage is the error for a command used wrong, showing its usage as the
+// help has it: a subcommand's forms, or the command's.
+func usage(name string, sub ...string) error {
+	c, _ := findCmd(name)
+	lines := []string{"lichen " + c.usage}
+	if len(c.subs) > 0 {
+		lines = nil
+		for _, s := range c.forms(strings.Join(sub, "")) {
+			lines = append(lines, "lichen "+s.usage)
+		}
+	}
+	// Aligned under the first, after main's "lichen: " prefix.
+	return errors.New("usage: " + strings.Join(lines, "\n"+strings.Repeat(" ", len("lichen: usage: "))))
 }
 
 func alias(names map[string]string, s string) string {

@@ -282,8 +282,8 @@ func Setup(url string) (string, error) {
 		return dir, err
 	}
 	settings := filepath.Join(dir, SettingsFile)
-	for _, f := range []string{SettingsFile, "lichen.json"} { // lichen.json: lichen 1.0
-		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+	for _, p := range []string{settings, filepath.Join(dir, "lichen.json")} { // lichen.json: lichen 1.0
+		if _, err := os.Stat(p); err == nil {
 			return dir, nil
 		}
 	}

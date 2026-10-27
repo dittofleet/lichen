@@ -20,7 +20,7 @@ func cmdSkills(args []string) error {
 	case "remove", "rm":
 		return cmdSkillsRemove(args[1:])
 	case "include", "exclude":
-		return cmdScope("skills", "<repo>", args, func(_ *core.Env, repo string, scope core.Scope) error { return skills.SetScope(repo, scope) })
+		return cmdScope("skills", args, func(_ *core.Env, repo string, scope core.Scope) error { return skills.SetScope(repo, scope) })
 	case "update":
 		return cmdSkillsUpdate()
 	case "list", "ls":
@@ -59,7 +59,7 @@ func cmdSkillsAdd(args []string) error {
 		}
 	}
 	if repo == "" {
-		return fmt.Errorf("usage: lichen skills add <owner/repo> [--skill <name>]... [--include|--exclude <devices,groups>]")
+		return usage("skills", "add")
 	}
 	var src skills.Source
 	var here bool
@@ -95,7 +95,7 @@ func cmdSkillsAdd(args []string) error {
 
 func cmdSkillsRemove(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: lichen skills remove <repo|skill...>")
+		return usage("skills", "remove")
 	}
 	err := change("skills: remove "+strings.Join(args, " "), func(*core.Env) error {
 		return skills.RemoveSources(args)
@@ -170,7 +170,7 @@ func cmdMCP(args []string) error {
 	case "remove", "rm":
 		return cmdMCPRemove(args[1:])
 	case "include", "exclude":
-		return cmdScope("mcp", "<name>", args, func(_ *core.Env, name string, scope core.Scope) error { return mcp.SetScope(name, scope) })
+		return cmdScope("mcp", args, func(_ *core.Env, name string, scope core.Scope) error { return mcp.SetScope(name, scope) })
 	case "list", "ls":
 		return cmdMCPList()
 	}
@@ -181,7 +181,7 @@ func cmdMCP(args []string) error {
 }
 
 func cmdMCPAdd(args []string) error {
-	usage := fmt.Errorf("usage: lichen mcp add <name> [--include|--exclude <devices,groups>] <command> [args...]  or  lichen mcp add <name> [--include|--exclude <devices,groups>] <url>")
+	usage := usage("mcp", "add")
 	if len(args) < 2 {
 		return usage
 	}
@@ -241,7 +241,7 @@ func cmdMCPAdd(args []string) error {
 
 func cmdMCPRemove(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: lichen mcp remove <name...>")
+		return usage("mcp", "remove")
 	}
 	err := change("mcp: remove "+strings.Join(args, " "), func(*core.Env) error { return mcp.RemoveServers(args) })
 	if err != nil {

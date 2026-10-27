@@ -19,7 +19,7 @@ func cmdFiles(args []string) error {
 		return cmdFilesAdd(args[1:])
 	case "remove", "rm":
 		if len(args) < 2 {
-			return errors.New("usage: lichen files remove <source|path>...")
+			return usage("files", "remove")
 		}
 		var removed []string
 		if err := change("stop syncing "+targets(args[1:]...), func(env *core.Env) (err error) {
@@ -31,10 +31,10 @@ func cmdFiles(args []string) error {
 		fmt.Printf("stopped syncing %s (the files stay where they are)\n", strings.Join(removed, ", "))
 		return nil
 	case "include", "exclude":
-		return cmdScope("files", "<source|path>", args, files.SetScope)
+		return cmdScope("files", args, files.SetScope)
 	case "recover":
 		if len(args) < 2 {
-			return errors.New("usage: lichen files recover <source|path>...")
+			return usage("files", "recover")
 		}
 		var recovered []string
 		if err := change("recover "+targets(args[1:]...), func(env *core.Env) (err error) {
@@ -80,7 +80,7 @@ func cmdFilesAdd(args []string) error {
 	}
 	switch {
 	case len(paths) == 0:
-		return errors.New("usage: lichen files add <path>... [--name <source>] [--include|--exclude <devices,groups>]")
+		return usage("files", "add")
 	case to != "" && (len(paths) > 1 || name != ""):
 		return errors.New("--to takes one path, and no --name")
 	}

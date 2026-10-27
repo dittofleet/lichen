@@ -27,10 +27,10 @@ const SettingsFile = "lichen.toml"
 type Settings struct {
 	// Groups names sets of devices, for scoping what goes where. Every
 	// device is also in the group named after its OS ("mac" or "linux").
-	Groups map[string][]string `toml:"groups,omitempty" json:"groups"`
+	Groups map[string][]string `toml:"groups,omitempty"`
 	// Backups keeps files lichen overwrites or deletes in
 	// ~/lichen-backups instead of removing them (see internal/backup).
-	Backups bool `toml:"backups,omitempty" json:"backups"`
+	Backups bool `toml:"backups,omitempty"`
 }
 
 // Env is one run's view of this machine: the sync folder, this device,

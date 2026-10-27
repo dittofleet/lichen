@@ -152,6 +152,12 @@ func ReadJSON(path string, v any) (exists bool, err error) {
 // missing file is not an error: exists reports it, and v is left
 // untouched.
 func ReadTOML(path string, v any) (exists bool, err error) {
+	return DecodeTOML(path, v, func(toml.MetaData) error { return nil })
+}
+
+// DecodeTOML is ReadTOML for a v holding toml.Primitive values, which
+// decode resolves before the check for unknown keys.
+func DecodeTOML(path string, v any, decode func(toml.MetaData) error) (exists bool, err error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return false, nil
@@ -160,11 +166,16 @@ func ReadTOML(path string, v any) (exists bool, err error) {
 		return false, err
 	}
 	md, err := toml.Decode(string(data), v)
+	if err == nil {
+		err = decode(md)
+	}
+	if err == nil {
+		if u := md.Undecoded(); len(u) > 0 {
+			err = fmt.Errorf("unknown key %s", u[0])
+		}
+	}
 	if err != nil {
 		return true, fmt.Errorf("parsing %s: %w", ContractHome(path), err)
-	}
-	if u := md.Undecoded(); len(u) > 0 {
-		return true, fmt.Errorf("parsing %s: unknown key %s", ContractHome(path), u[0])
 	}
 	return true, nil
 }
