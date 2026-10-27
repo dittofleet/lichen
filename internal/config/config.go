@@ -161,10 +161,10 @@ func ReadTOML(path string, v any) (exists bool, err error) {
 	}
 	md, err := toml.Decode(string(data), v)
 	if err != nil {
-		return true, fmt.Errorf("parsing %s: %w", path, err)
+		return true, fmt.Errorf("parsing %s: %w", ContractHome(path), err)
 	}
 	if u := md.Undecoded(); len(u) > 0 {
-		return true, fmt.Errorf("parsing %s: unknown key %s", path, u[0])
+		return true, fmt.Errorf("parsing %s: unknown key %s", ContractHome(path), u[0])
 	}
 	return true, nil
 }

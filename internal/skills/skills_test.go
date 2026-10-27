@@ -339,8 +339,8 @@ func TestRun(t *testing.T) {
 	if _, err := AddSource("me/skills", []string{"only"}, core.Scope{}, quiet); err != nil {
 		t.Fatal(err)
 	}
-	if got := Configured()[0].Include; !slices.Equal(got, []string{"linux", "lychee"}) {
-		t.Errorf("scope after re-adding = %v", got)
+	if got, _ := Configured(); !slices.Equal(got[0].Include, []string{"linux", "lychee"}) {
+		t.Errorf("scope after re-adding = %v", got[0].Include)
 	}
 	// A skill the repo doesn't have is refused, and nothing is saved.
 	cfg, _ := ConfigPath()

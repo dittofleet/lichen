@@ -103,6 +103,9 @@ func (e *Env) EditGroup(add bool, group string, devices []string) error {
 	if groups == nil {
 		groups = map[string][]string{}
 	}
+	if _, ok := groups[group]; !ok && !add {
+		return fmt.Errorf("%s is not a group (see: lichen groups)", group)
+	}
 	switch {
 	case add:
 		for _, d := range devices {
@@ -121,9 +124,8 @@ func (e *Env) EditGroup(add bool, group string, devices []string) error {
 	if len(groups) == 0 {
 		groups = nil
 	}
-	s := e.Settings
-	s.Groups = groups
-	return config.WriteTOML(e.Path(SettingsFile), s)
+	e.Settings.Groups = groups
+	return config.WriteTOML(e.Path(SettingsFile), e.Settings)
 }
 
 // Path resolves a path inside the sync folder.

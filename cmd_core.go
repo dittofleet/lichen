@@ -216,9 +216,22 @@ func cmdGroups(args []string) error {
 	}
 	op, group, members := args[0], args[1], args[2:]
 	subject := strings.TrimSpace(fmt.Sprintf("groups: %s %s %s", op, group, strings.Join(members, " ")))
-	return change(subject, func(env *core.Env) error {
-		return env.EditGroup(op == "add", group, members)
-	})
+	var now []string
+	if err := change(subject, func(env *core.Env) error {
+		if err := env.EditGroup(op == "add", group, members); err != nil {
+			return err
+		}
+		now = env.Settings.Groups[group]
+		return nil
+	}); err != nil {
+		return err
+	}
+	if len(now) == 0 {
+		fmt.Printf("%s: deleted\n", group)
+	} else {
+		fmt.Printf("%s: %s\n", group, strings.Join(now, ", "))
+	}
+	return nil
 }
 
 func cmdGroupsList() error {

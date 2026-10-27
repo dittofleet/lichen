@@ -124,7 +124,10 @@ func cmdSkillsList() error {
 	if err != nil {
 		return err
 	}
-	configured := skills.Configured()
+	configured, err := skills.Configured()
+	if err != nil {
+		return err
+	}
 	if len(installed) == 0 && len(configured) == 0 {
 		fmt.Println("no skills synced (lichen skills add <owner/repo>)")
 		return nil

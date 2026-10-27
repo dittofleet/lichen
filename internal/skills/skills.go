@@ -117,7 +117,7 @@ func loadConfig() (cfg *skillsConfig, exists bool, err error) {
 		return &skillsConfig{}, false, nil
 	}
 	if err != nil {
-		return nil, true, fmt.Errorf("parsing %s: %w", p, err)
+		return nil, true, fmt.Errorf("parsing %s: %w", config.ContractHome(p), err)
 	}
 	cfg = &skillsConfig{}
 	for _, key := range slices.Sorted(maps.Keys(raw)) {
@@ -129,11 +129,11 @@ func loadConfig() (cfg *skillsConfig, exists bool, err error) {
 			cfg.Sources = append(cfg.Sources, src)
 		}
 		if err != nil {
-			return nil, true, fmt.Errorf("parsing %s: %s: %w", p, key, err)
+			return nil, true, fmt.Errorf("parsing %s: %s: %w", config.ContractHome(p), key, err)
 		}
 	}
 	if u := md.Undecoded(); len(u) > 0 {
-		return nil, true, fmt.Errorf("parsing %s: unknown key %s", p, u[0])
+		return nil, true, fmt.Errorf("parsing %s: unknown key %s", config.ContractHome(p), u[0])
 	}
 	return cfg, true, nil
 }
@@ -1030,17 +1030,17 @@ func Installed() ([]Skill, error) {
 	return out, nil
 }
 
-// Configured returns the configured skill repos, in config order, each
+// Configured returns the configured skill repos, sorted by repo, each
 // under its canonical key (unparseable entries pass through as written).
-func Configured() []Source {
+func Configured() ([]Source, error) {
 	sources, err := loadSources()
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	for i, src := range sources {
 		if key, _, err := parseSpec(src.Repo); err == nil {
 			sources[i].Repo = key
 		}
 	}
-	return sources
+	return sources, nil
 }

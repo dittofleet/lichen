@@ -165,10 +165,10 @@ func cmdScope(module, placeholder string, args []string, set func(env *core.Env,
 	return nil
 }
 
-// scopeFlag sets scope from --include or --exclude and a comma list of
-// devices and groups. A thing has one or the other.
+// scopeFlag adds to scope from --include or --exclude and a comma list
+// of devices and groups. A thing has one or the other.
 func scopeFlag(scope *core.Scope, flag, list string) error {
-	if !scope.Everywhere() {
+	if (flag == "--include" && scope.Exclude != nil) || (flag == "--exclude" && scope.Include != nil) {
 		return errors.New("use --include or --exclude, not both")
 	}
 	var names []string
@@ -182,9 +182,9 @@ func scopeFlag(scope *core.Scope, flag, list string) error {
 		names = append(names, n)
 	}
 	if flag == "--include" {
-		scope.Include = names
+		scope.Include = append(scope.Include, names...)
 	} else {
-		scope.Exclude = names
+		scope.Exclude = append(scope.Exclude, names...)
 	}
 	return nil
 }
