@@ -20,7 +20,7 @@ func reader(files map[string]string) func(string) ([]byte, error) {
 
 func TestCompile(t *testing.T) {
 	srcs := map[string]string{
-		"zshrc":      "a\n§ zsh/common\n§ zsh/mac if mac, lychee\n§ zsh/linux if linux\n§§ not an insert\nb\n",
+		"zshrc":      "a\n§ zsh/common\n§ zsh/mac if mac, lychee\n§ zsh/linux if linux\n§ zsh/linux unless mac\n§§ not an insert\nb\n",
 		"zsh/common": "c1\n§ zsh/nested\n",
 		"zsh/nested": "n1",
 		"zsh/mac":    "m1\n",
@@ -37,13 +37,13 @@ func TestCompile(t *testing.T) {
 	if got := slices.Sorted(maps.Keys(c.deps)); !slices.Equal(got, []string{"zsh/common", "zsh/mac", "zsh/nested", "zshrc"}) {
 		t.Fatalf("deps = %v (an insert not compiled in is not one)", got)
 	}
-	from := []pos{{"zshrc", 0}, {"zsh/common", 0}, {"zsh/nested", 0}, {"zsh/mac", 0}, {"zshrc", 4}, {"zshrc", 5}}
+	from := []pos{{"zshrc", 0}, {"zsh/common", 0}, {"zsh/nested", 0}, {"zsh/mac", 0}, {"zshrc", 5}, {"zshrc", 6}}
 	if !slices.Equal(c.lines, from) {
 		t.Fatalf("lines = %v, want %v", c.lines, from)
 	}
-	// After m1: the end of zsh/mac, or zshrc around the linux insert that
-	// isn't compiled in here.
-	if got, want := c.gaps[4], []pos{{"zsh/mac", 1}, {"zshrc", 3}, {"zshrc", 4}}; !slices.Equal(got, want) {
+	// After m1: the end of zsh/mac, or zshrc around the linux inserts
+	// that aren't compiled in here.
+	if got, want := c.gaps[4], []pos{{"zsh/mac", 1}, {"zshrc", 3}, {"zshrc", 4}, {"zshrc", 5}}; !slices.Equal(got, want) {
 		t.Fatalf("gap before line 4 = %v, want %v", got, want)
 	}
 }
@@ -53,14 +53,15 @@ func TestCompileErrors(t *testing.T) {
 		srcs map[string]string
 		err  string
 	}{
-		"missing":   {map[string]string{"a": "§ b\n"}, "no source b"},
-		"cycle":     {map[string]string{"a": "§ b\n", "b": "§ c\n", "c": "§ a\n"}, "a > b > c > a"},
-		"self":      {map[string]string{"a": "x\n§ a if mac\n"}, "a > a"},
-		"no space":  {map[string]string{"a": "§b\n"}, "§§"},
-		"empty if":  {map[string]string{"a": "§ b if \n", "b": ""}, "`if` takes"},
-		"bad group": {map[string]string{"a": "§ b if Mac\n", "b": ""}, "not a device or group"},
-		"bad name":  {map[string]string{"a": "§ ../b\n"}, "not a usable source name"},
-		"binary in": {map[string]string{"a": "§ b\n", "b": "\x00"}, "not text"},
+		"missing":      {map[string]string{"a": "§ b\n"}, "no source b"},
+		"cycle":        {map[string]string{"a": "§ b\n", "b": "§ c\n", "c": "§ a\n"}, "a > b > c > a"},
+		"self":         {map[string]string{"a": "x\n§ a if mac\n"}, "a > a"},
+		"no space":     {map[string]string{"a": "§b\n"}, "§§"},
+		"empty if":     {map[string]string{"a": "§ b if \n", "b": ""}, "`if` takes"},
+		"empty unless": {map[string]string{"a": "§ b unless \n", "b": ""}, "`unless` takes"},
+		"bad group":    {map[string]string{"a": "§ b if Mac\n", "b": ""}, "not a device or group"},
+		"bad name":     {map[string]string{"a": "§ ../b\n"}, "not a usable source name"},
+		"binary in":    {map[string]string{"a": "§ b\n", "b": "\x00"}, "not text"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := compile("a", reader(tc.srcs), []string{"mac"})

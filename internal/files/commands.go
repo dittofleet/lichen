@@ -62,8 +62,8 @@ func outputAt(c *fileConfig, p string) (name string, out Output, err error) {
 }
 
 // Add starts syncing files or directories: each becomes a source, with
-// an output where it is. Only scopes the new outputs to some devices.
-func Add(env *core.Env, paths []string, name string, only []string) ([]string, error) {
+// an output where it is, for the devices in scope.
+func Add(env *core.Env, paths []string, name string, scope core.Scope) ([]string, error) {
 	if name != "" && len(paths) > 1 {
 		return nil, errors.New("--name takes one path at a time")
 	}
@@ -136,7 +136,7 @@ func Add(env *core.Env, paths []string, name string, only []string) ([]string, e
 			}
 			secret = secret || private(out)
 		}
-		c.Sources[n] = Source{To: []Output{{Path: config.ContractHome(abs), Only: only}}, Private: secret}
+		c.Sources[n] = Source{To: []Output{{Path: config.ContractHome(abs), Scope: scope}}, Private: secret}
 		// A source deleted around this one is gone for good: it would
 		// otherwise look like it came back.
 		for d := range dead {
@@ -159,7 +159,7 @@ func Add(env *core.Env, paths []string, name string, only []string) ([]string, e
 // there is replaced by the source on the next pass. A directory there
 // may only hold files the source has: any other file in it would join
 // the source, and go everywhere.
-func AddOutput(env *core.Env, source, p string, only []string) error {
+func AddOutput(env *core.Env, source, p string, scope core.Scope) error {
 	c, err := loadConfig(env)
 	if err != nil {
 		return err
@@ -183,7 +183,7 @@ func AddOutput(env *core.Env, source, p string, only []string) error {
 			}
 		}
 	}
-	s.To = append(s.To, Output{Path: config.ContractHome(abs), Only: only})
+	s.To = append(s.To, Output{Path: config.ContractHome(abs), Scope: scope})
 	c.Sources[source] = s
 	return c.save(env)
 }
@@ -223,9 +223,9 @@ func Remove(env *core.Env, args []string) ([]string, error) {
 	return removed, c.save(env)
 }
 
-// Only scopes outputs to devices and groups: one output by its path, or
-// every output of a source by its name. No groups is every device.
-func Only(env *core.Env, target string, groups []string) error {
+// SetScope scopes outputs to devices: one output by its path, or every
+// output of a source by its name.
+func SetScope(env *core.Env, target string, scope core.Scope) error {
 	c, err := loadConfig(env)
 	if err != nil {
 		return err
@@ -241,7 +241,7 @@ func Only(env *core.Env, target string, groups []string) error {
 	s := c.Sources[n]
 	for i := range s.To {
 		if only == "" || s.To[i].Path == only {
-			s.To[i].Only = groups
+			s.To[i].Scope = scope
 		}
 	}
 	c.Sources[n] = s

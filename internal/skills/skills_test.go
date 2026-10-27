@@ -306,7 +306,7 @@ func TestRun(t *testing.T) {
 	expect(filepath.Join(agents, "only"), false)
 
 	// Removal cleans up the private copy and its link.
-	writeConfig(`{"sources":[{"repo":"me/skills","except":["only"]}],"harnesses":["~/.claude/skills","~/.codex/skills"]}`)
+	writeConfig(`{"sources":[{"repo":"me/skills","skills":["both"]}],"harnesses":["~/.claude/skills","~/.codex/skills"]}`)
 	pass()
 	expect(filepath.Join(private, "only"), false)
 	expect(filepath.Join(codex, "only"), false)
@@ -314,7 +314,7 @@ func TestRun(t *testing.T) {
 
 	// A repo for other devices is uninstalled here, clone and all, and
 	// comes back when this device is in again.
-	if err := Only("me/skills", []string{"linux"}); err != nil {
+	if err := SetScope("me/skills", core.Scope{Include: []string{"linux"}}); err != nil {
 		t.Fatal(err)
 	}
 	pass()
@@ -322,7 +322,12 @@ func TestRun(t *testing.T) {
 	expect(filepath.Join(claude, "both"), false)
 	expect(filepath.Join(clones, cloneDirName("github.com/me/skills")), false)
 	git(home, "clone", "-q", upstream, filepath.Join(clones, cloneDirName("github.com/me/skills")))
-	if err := Only("me/skills", []string{"linux", "lychee"}); err != nil {
+	if err := SetScope("me/skills", core.Scope{Exclude: []string{"mac", "linux"}}); err != nil {
+		t.Fatal(err)
+	}
+	pass()
+	expect(filepath.Join(agents, "both"), false)
+	if err := SetScope("me/skills", core.Scope{Include: []string{"linux", "lychee"}}); err != nil {
 		t.Fatal(err)
 	}
 	pass()
@@ -331,16 +336,16 @@ func TestRun(t *testing.T) {
 		t.Error("claude link missing after scoping back in")
 	}
 	// Adding more of the repo keeps its scope.
-	if _, err := AddSource("me/skills", []string{"only"}, nil, quiet); err != nil {
+	if _, err := AddSource("me/skills", []string{"only"}, core.Scope{}, quiet); err != nil {
 		t.Fatal(err)
 	}
-	if got := Configured()[0].Only; !slices.Equal(got, []string{"linux", "lychee"}) {
+	if got := Configured()[0].Include; !slices.Equal(got, []string{"linux", "lychee"}) {
 		t.Errorf("scope after re-adding = %v", got)
 	}
 	// A skill the repo doesn't have is refused, and nothing is saved.
 	cfg, _ := ConfigPath()
 	before, _ := os.ReadFile(cfg)
-	if _, err := AddSource("me/skills", []string{"typo"}, nil, quiet); err == nil || !strings.Contains(err.Error(), "it has both, only") {
+	if _, err := AddSource("me/skills", []string{"typo"}, core.Scope{}, quiet); err == nil || !strings.Contains(err.Error(), "it has both, only") {
 		t.Errorf("adding a missing skill: %v", err)
 	}
 	if after, _ := os.ReadFile(cfg); string(after) != string(before) {
@@ -349,7 +354,7 @@ func TestRun(t *testing.T) {
 
 	// An entry this build can't parse holds removals back, but not one
 	// for other devices.
-	writeConfig(`{"sources":[{"repo":"me/skills","only":["linux"]},{"repo":"not a spec","only":["linux"]}],"harnesses":["~/.claude/skills","~/.codex/skills"]}`)
+	writeConfig(`{"sources":[{"repo":"me/skills","include":["linux"]},{"repo":"not a spec","include":["linux"]}],"harnesses":["~/.claude/skills","~/.codex/skills"]}`)
 	pass()
 	expect(filepath.Join(agents, "both"), false)
 }

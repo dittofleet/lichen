@@ -6,6 +6,7 @@
 package core
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"log"
@@ -26,8 +27,7 @@ const SettingsFile = "lichen.json"
 
 type Settings struct {
 	// Groups names sets of devices, for scoping what goes where. Every
-	// device is also in a group named after itself and one named after
-	// its OS ("mac" or "linux").
+	// device is also in the group named after its OS ("mac" or "linux").
 	Groups map[string][]string `json:"groups,omitempty"`
 	// Backups keeps files lichen overwrites or deletes in
 	// ~/lichen-backups instead of removing them (see internal/backup).
@@ -65,12 +65,38 @@ func Load(lg *log.Logger) (*Env, error) {
 
 // Reload re-reads the settings, as after a pull or an edit to them.
 func (e *Env) Reload() error {
+	if err := e.renameOnly(); err != nil {
+		return err
+	}
 	var s Settings
 	if _, err := config.ReadJSON(e.Path(SettingsFile), &s); err != nil {
 		return err
 	}
 	e.Settings = s
-	e.Device.Groups = append([]string{e.Device.Name, osGroup()}, s.GroupsOf(e.Device.Name)...)
+	e.Device.Groups = append([]string{osGroup()}, s.GroupsOf(e.Device.Name)...)
+	return nil
+}
+
+// renameOnly rewrites the "only" scopes of lichen 1.0 and earlier as
+// "include", in every config. The edit syncs with the version this
+// build records, so an older build pauses rather than reading it.
+// Remove once no sync folder holds an "only".
+func (e *Env) renameOnly() error {
+	paths, err := filepath.Glob(e.Path("*.json"))
+	if err != nil {
+		return err
+	}
+	for _, p := range paths {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		if renamed := bytes.ReplaceAll(b, []byte(`"only":`), []byte(`"include":`)); !bytes.Equal(renamed, b) {
+			if err := os.WriteFile(p, renamed, 0o644); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -130,16 +156,35 @@ func (e *Env) Path(parts ...string) string {
 // Device is this machine, as lichen scopes things to it.
 type Device struct {
 	Name   string
-	Groups []string // its own name, its OS, and every custom group it is in
+	Groups []string // its OS, and every custom group it is in
 }
 
-// In reports whether the device belongs to any of groups. No groups at
-// all means every device.
-func (d Device) In(groups []string) bool {
-	if len(groups) == 0 {
-		return true
+// Scope picks the devices something goes to, by device and group names:
+// the ones Include names, or all but the ones Exclude names. Never both,
+// and neither is every device.
+type Scope struct {
+	Include []string `json:"include,omitempty"`
+	Exclude []string `json:"exclude,omitempty"`
+}
+
+// Everywhere reports whether the scope is every device.
+func (s Scope) Everywhere() bool { return len(s.Include) == 0 && len(s.Exclude) == 0 }
+
+// In reports whether the device is in scope.
+func (d Device) In(s Scope) bool {
+	if len(s.Include) > 0 {
+		return d.named(s.Include)
 	}
-	return slices.ContainsFunc(groups, func(g string) bool { return slices.Contains(d.Groups, g) })
+	return !d.named(s.Exclude)
+}
+
+// Names lists what the device answers to in a scope: its name, then
+// its groups.
+func (d Device) Names() []string { return append([]string{d.Name}, d.Groups...) }
+
+// named reports whether any of names is the device or one of its groups.
+func (d Device) named(names []string) bool {
+	return slices.ContainsFunc(names, func(n string) bool { return n == d.Name || slices.Contains(d.Groups, n) })
 }
 
 func osGroup() string {
@@ -190,12 +235,16 @@ func nameFrom(host string) string {
 	return name
 }
 
-// Describe names a scope for people: "every device", or its groups.
-func Describe(groups []string) string {
-	if len(groups) == 0 {
-		return "every device"
+// Describe names a scope for people: "every device", the devices and
+// groups it includes, or "every device but" the ones it excludes.
+func Describe(s Scope) string {
+	switch {
+	case len(s.Include) > 0:
+		return strings.Join(s.Include, ", ")
+	case len(s.Exclude) > 0:
+		return "every device but " + strings.Join(s.Exclude, ", ")
 	}
-	return strings.Join(groups, ", ")
+	return "every device"
 }
 
 var groupName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)

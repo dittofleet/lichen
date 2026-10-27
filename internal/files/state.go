@@ -19,8 +19,8 @@ type record struct {
 	Hash   string `json:"hash"`   // of the content lichen wrote
 	// Deps is every source file that content was compiled from (the file
 	// itself, and what it inserts), by the hash of its content then, and
-	// Groups the device's groups then: together they say where each line
-	// of it came from.
+	// Groups the names the device answered to then (core.Device.Names):
+	// together they say where each line of it came from.
 	Deps   map[string]string `json:"deps"`
 	Groups []string          `json:"groups"`
 	Exec   bool              `json:"exec,omitempty"`

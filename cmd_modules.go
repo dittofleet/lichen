@@ -19,22 +19,23 @@ func cmdSkills(args []string) error {
 		return cmdSkillsAdd(args[1:])
 	case "remove", "rm":
 		return cmdSkillsRemove(args[1:])
-	case "only":
-		if len(args) < 2 {
-			return fmt.Errorf("usage: lichen skills only <repo> [<group>...]")
-		}
-		return cmdOnly("skills: "+args[1], args[2:], func(*core.Env) error { return skills.Only(args[1], args[2:]) })
+	case "include", "exclude":
+		return cmdScope("skills", "<repo>", args, func(_ *core.Env, repo string, scope core.Scope) error { return skills.SetScope(repo, scope) })
 	case "update":
 		return cmdSkillsUpdate()
 	case "list", "ls":
 		return cmdSkillsList()
 	}
-	return fmt.Errorf("usage: lichen skills <add|remove|only|list|update>")
+	if sub != "" {
+		return fmt.Errorf("unknown command %q (see: lichen help skills)", sub)
+	}
+	return printHelp([]string{"skills"})
 }
 
 func cmdSkillsAdd(args []string) error {
 	var repo string
-	var names, only []string
+	var names []string
+	var scope core.Scope
 	for i := 0; i < len(args); i++ {
 		switch {
 		case args[i] == "--skill":
@@ -42,12 +43,11 @@ func cmdSkillsAdd(args []string) error {
 				return fmt.Errorf("--skill needs a name")
 			}
 			names = append(names, args[i])
-		case args[i] == "--only":
+		case args[i] == "--include" || args[i] == "--exclude":
 			if i++; i >= len(args) {
-				return fmt.Errorf("--only needs groups")
+				return fmt.Errorf("%s needs devices or groups", args[i-1])
 			}
-			var err error
-			if only, err = groupList(args[i]); err != nil {
+			if err := scopeFlag(&scope, args[i-1], args[i]); err != nil {
 				return err
 			}
 		case strings.HasPrefix(args[i], "-"):
@@ -59,20 +59,20 @@ func cmdSkillsAdd(args []string) error {
 		}
 	}
 	if repo == "" {
-		return fmt.Errorf("usage: lichen skills add <owner/repo> [--skill <name>]... [--only <groups>]")
+		return fmt.Errorf("usage: lichen skills add <owner/repo> [--skill <name>]... [--include|--exclude <devices,groups>]")
 	}
 	var src skills.Source
 	var here bool
 	err := change("skills: add "+repo, func(env *core.Env) (err error) {
-		src, err = skills.AddSource(repo, names, only, env.Log)
-		here = env.Device.In(src.Only)
+		src, err = skills.AddSource(repo, names, scope, env.Log)
+		here = env.Device.In(src.Scope)
 		return err
 	})
 	if err != nil {
 		return err
 	}
 	if !here {
-		fmt.Printf("syncing %s on %s, so not here\n", src.Repo, core.Describe(src.Only))
+		fmt.Printf("syncing %s on %s, so not here\n", src.Repo, core.Describe(src.Scope))
 		return nil
 	}
 	installed, err := skills.Installed()
@@ -145,8 +145,8 @@ func cmdSkillsList() error {
 	for _, src := range configured {
 		switch {
 		case fromRepo[src.Repo]:
-		case !env.Device.In(src.Only):
-			fmt.Println(notHere(src.Repo, src.Only))
+		case !env.Device.In(src.Scope):
+			fmt.Println(notHere(src.Repo, src.Scope))
 		default:
 			// Nothing installed yet: a fresh machine before its first
 			// pass, or a repo that failed to clone.
@@ -166,28 +166,27 @@ func cmdMCP(args []string) error {
 		return cmdMCPAdd(args[1:])
 	case "remove", "rm":
 		return cmdMCPRemove(args[1:])
-	case "only":
-		if len(args) < 2 {
-			return fmt.Errorf("usage: lichen mcp only <name> [<group>...]")
-		}
-		return cmdOnly("mcp: "+args[1], args[2:], func(*core.Env) error { return mcp.Only(args[1], args[2:]) })
+	case "include", "exclude":
+		return cmdScope("mcp", "<name>", args, func(_ *core.Env, name string, scope core.Scope) error { return mcp.SetScope(name, scope) })
 	case "list", "ls":
 		return cmdMCPList()
 	}
-	return fmt.Errorf("usage: lichen mcp <add|remove|only|list>")
+	if sub != "" {
+		return fmt.Errorf("unknown command %q (see: lichen help mcp)", sub)
+	}
+	return printHelp([]string{"mcp"})
 }
 
 func cmdMCPAdd(args []string) error {
-	usage := fmt.Errorf("usage: lichen mcp add <name> [--only <groups>] <command> [args...]  or  lichen mcp add <name> [--only <groups>] <url>")
+	usage := fmt.Errorf("usage: lichen mcp add <name> [--include|--exclude <devices,groups>] <command> [args...]  or  lichen mcp add <name> [--include|--exclude <devices,groups>] <url>")
 	if len(args) < 2 {
 		return usage
 	}
 	// Flags go before the command: whatever follows it is its own.
 	name, rest := args[0], args[1:]
-	var only []string
-	for len(rest) > 1 && rest[0] == "--only" {
-		var err error
-		if only, err = groupList(rest[1]); err != nil {
+	var scope core.Scope
+	for len(rest) > 1 && (rest[0] == "--include" || rest[0] == "--exclude") {
+		if err := scopeFlag(&scope, rest[0], rest[1]); err != nil {
 			return err
 		}
 		rest = rest[2:]
@@ -207,17 +206,17 @@ func cmdMCPAdd(args []string) error {
 		}
 		s = mcp.Server{URL: rest[0]}
 	}
-	s.Only = only
+	s.Scope = scope
 	var here bool
 	err := change("mcp: add "+name, func(env *core.Env) error {
-		here = env.Device.In(only)
+		here = env.Device.In(scope)
 		return mcp.AddServer(name, s)
 	})
 	if err != nil {
 		return err
 	}
 	if !here {
-		fmt.Printf("syncing %s on %s, so not here\n", name, core.Describe(only))
+		fmt.Printf("syncing %s on %s, so not here\n", name, core.Describe(scope))
 		return nil
 	}
 	entries, err := mcp.List()
@@ -268,16 +267,16 @@ func cmdMCPList() error {
 	}
 	for _, e := range entries {
 		line := fmt.Sprintf("%-*s  %s", width, e.Name, e.Server)
-		if !env.Device.In(e.Server.Only) {
-			fmt.Println(notHere(line, e.Server.Only))
+		if !env.Device.In(e.Server.Scope) {
+			fmt.Println(notHere(line, e.Server.Scope))
 			continue
 		}
 		where := "not installed here, see: lichen logs"
 		if len(e.Harnesses) > 0 {
 			where = strings.Join(e.Harnesses, ", ")
 		}
-		if len(e.Server.Only) > 0 {
-			where = core.Describe(e.Server.Only) + ": " + where
+		if !e.Server.Scope.Everywhere() {
+			where = core.Describe(e.Server.Scope) + ": " + where
 		}
 		fmt.Println(line + "  " + dim("("+where+")"))
 	}

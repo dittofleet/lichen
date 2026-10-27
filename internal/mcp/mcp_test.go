@@ -144,24 +144,36 @@ func TestReconcile(t *testing.T) {
 
 	// A server for other devices is removed here, and comes back when
 	// this device is in again. A scope change alone reinstalls nothing.
-	if err := Only("pw", []string{"linux"}); err != nil {
+	if err := SetScope("pw", core.Scope{Include: []string{"linux"}}); err != nil {
 		t.Fatal(err)
 	}
 	reconcile()
 	expect(claude, "remove pw")
 	expect(codex, "remove pw")
-	if err := Only("pw", []string{"mac"}); err != nil {
+	if err := SetScope("pw", core.Scope{Include: []string{"mac"}}); err != nil {
 		t.Fatal(err)
 	}
 	reconcile()
 	expect(claude, "add pw")
 	expect(codex, "add pw")
-	if err := Only("pw", []string{"lychee"}); err != nil {
+	if err := SetScope("pw", core.Scope{Include: []string{"lychee"}}); err != nil {
 		t.Fatal(err)
 	}
 	reconcile()
 	expect(claude)
 	expect(codex)
+	if err := SetScope("pw", core.Scope{Exclude: []string{"lychee"}}); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	expect(claude, "remove pw")
+	expect(codex, "remove pw")
+	if err := SetScope("pw", core.Scope{}); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	expect(claude, "add pw")
+	expect(codex, "add pw")
 
 	// A harness that is missing on this machine is skipped, and what
 	// lichen installed there earlier is left as is.

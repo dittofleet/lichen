@@ -53,6 +53,31 @@ later, if you skip the question.
 Edit anything in it and lichen commits and pushes it. You never run git
 there yourself, but its history is all there.
 
+## Which devices get what
+
+Everything syncs to every device unless scoped. A scope is a list of
+devices and groups, either included or excluded:
+
+```sh
+lichen files add ~/.zshrc --include mac,lychee
+lichen files add ~/.vimrc --exclude servers
+lichen files include ~/.zshrc mac   # change it later
+lichen files exclude ~/.zshrc       # every device again
+```
+
+Skills and MCP servers work the same way, and [inserts](#inserts) use
+`if` and `unless`. A device that falls out of scope keeps its files as
+plain files and uninstalls its skills and servers.
+
+`lichen devices` lists device names (crosstalk's). `mac` and `linux` are
+built-in groups. Custom groups are stored in `~/lichen/lichen.json`:
+
+```sh
+lichen groups add servers hetzner-1 hetzner-2
+lichen groups remove servers hetzner-2   # no devices: deletes the group
+lichen groups                            # list groups
+```
+
 ## Files
 
 ```sh
@@ -68,29 +93,22 @@ added to it later.
 
 `lichen files` shows every source and where it goes.
 
-### Which devices, and where
+### Several outputs
 
-An output can be limited to some devices: by name, by OS (`mac`,
-`linux`), or by a group of your own.
-
-```sh
-lichen files add ~/.zshrc --only mac
-lichen groups add servers hetzner-1 hetzner-2
-lichen files only ~/.zshrc mac servers   # change it later
-lichen devices                           # names and groups
-```
-
-One source can go to several places, and each place can have its own
-devices:
+One source can have several outputs, each with its own
+[scope](#which-devices-get-what):
 
 ```sh
 lichen files add ~/.codex/AGENTS.md --to claude/CLAUDE.md
-lichen files add ~/.config/agents.md --to claude/CLAUDE.md --only linux
+lichen files add ~/.config/agents.md --to claude/CLAUDE.md --include linux
 ```
 
-Edit any of them and the others follow. When a device joins with its own
-copy of a file that is already synced, the synced version replaces it. A
-file only you can read (`~/.netrc`, say) is written that way everywhere.
+Edit any of them and the others follow. `lichen files include` and
+`exclude` take a path for one output, or a source name for all of them.
+
+When a device joins with its own copy of a file that is already synced,
+the synced version replaces it. A file only you can read (`~/.netrc`,
+say) is written that way everywhere.
 
 ### Inserts
 
@@ -103,10 +121,11 @@ export EDITOR=vim
 § zsh/aliases
 § zsh/mac if mac
 § zsh/work if lychee, servers
+§ zsh/gui unless servers
 ```
 
-`~/.zshrc` gets `zsh/aliases` everywhere, `zsh/mac` on Macs, and
-`zsh/work` on lychee and the servers: `if` takes devices and groups. A
+`~/.zshrc` gets `zsh/aliases` everywhere, `zsh/mac` on Macs, `zsh/work`
+on lychee and the servers, and `zsh/gui` everywhere but the servers. A
 piece can insert others, and needs no output of its own. A line meant to
 start with `§` starts with `§§` in the source.
 
@@ -204,12 +223,11 @@ daemon polls each repo about hourly, and a repo moving only reinstalls
 the skills whose content actually changed. `lichen skills update` checks
 immediately.
 
-A repo's skills can be limited to some devices, as files can. A device
-left out uninstalls them:
+A repo's skills can be [scoped](#which-devices-get-what):
 
 ```sh
-lichen skills add owner/mac-skills --only mac
-lichen skills only owner/mac-skills mac servers   # change it later
+lichen skills add owner/mac-skills --include mac
+lichen skills exclude owner/mac-skills servers   # change it later
 ```
 
 ## MCP servers
@@ -233,12 +251,11 @@ instead. Running sessions pick up changes after a restart.
 
 The list of servers lives in `~/lichen/mcp.json`, so adding a server on
 one device installs it everywhere, and removing one uninstalls it
-everywhere. A server can be limited to some devices, and a device left
-out uninstalls it:
+everywhere. A server can be [scoped](#which-devices-get-what):
 
 ```sh
-lichen mcp add playwright --only mac bunx @playwright/mcp@latest
-lichen mcp only playwright mac servers   # change it later
+lichen mcp add playwright --include mac bunx @playwright/mcp@latest
+lichen mcp include playwright mac lychee   # change it later
 ```
 
 Servers that need API keys, headers or a login aren't supported.

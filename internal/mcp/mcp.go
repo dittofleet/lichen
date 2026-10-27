@@ -43,9 +43,7 @@ type Server struct {
 	Command string   `json:"command,omitempty"`
 	Args    []string `json:"args,omitempty"`
 	URL     string   `json:"url,omitempty"`
-	// Only limits the server to these devices and groups. Empty is every
-	// device.
-	Only []string `json:"only,omitempty"`
+	core.Scope
 }
 
 // equal reports whether two servers run the same thing, wherever they
@@ -195,7 +193,7 @@ func Reconcile(env *core.Env) error {
 		return err
 	}
 	// A server for other devices is as good as unlisted here.
-	maps.DeleteFunc(cfg.Servers, func(_ string, s Server) bool { return !env.Device.In(s.Only) })
+	maps.DeleteFunc(cfg.Servers, func(_ string, s Server) bool { return !env.Device.In(s.Scope) })
 	if len(cfg.Servers) == 0 && len(man.Servers) == 0 {
 		return nil
 	}
@@ -315,9 +313,8 @@ func AddServer(name string, s Server) error {
 	return saveServers(cfg.Servers)
 }
 
-// Only limits a server to some devices and groups. No groups is every
-// device.
-func Only(name string, only []string) error {
+// SetScope scopes a server to devices.
+func SetScope(name string, scope core.Scope) error {
 	cfg, _, err := loadConfig()
 	if err != nil {
 		return err
@@ -326,7 +323,7 @@ func Only(name string, only []string) error {
 	if !ok {
 		return fmt.Errorf("%q is not a synced MCP server (see: lichen mcp list)", name)
 	}
-	s.Only = only
+	s.Scope = scope
 	cfg.Servers[name] = s
 	return saveServers(cfg.Servers)
 }

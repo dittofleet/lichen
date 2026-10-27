@@ -38,9 +38,7 @@ const (
 // Output is one place a source is written to.
 type Output struct {
 	Path string `json:"path"` // ~/-relative
-	// Only limits the output to these devices and groups. Empty is every
-	// device.
-	Only []string `json:"only,omitempty"`
+	core.Scope
 }
 
 // Source is one entry of files.json, keyed by its path under files/.
@@ -215,7 +213,7 @@ func wants(env *core.Env, c *fileConfig, lg *log.Logger) (ws map[string]want, di
 			continue // a missing source is handled by Reconcile
 		}
 		for _, o := range c.Sources[name].To {
-			if !env.Device.In(o.Only) {
+			if !env.Device.In(o.Scope) {
 				continue
 			}
 			root, err := o.root()
