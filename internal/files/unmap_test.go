@@ -170,3 +170,22 @@ func TestDiff(t *testing.T) {
 		}
 	}
 }
+
+// A blank line hidden with an insert not here is still in the source,
+// and lines added beside it go above it.
+func TestUnmapBesideAHiddenBlank(t *testing.T) {
+	srcs := map[string]string{"zshrc": "§ zsh/linux if linux\n\na\n\n§ zsh/linux if linux\n", "zsh/linux": "l\n"}
+	for live, want := range map[string]string{
+		"a\nb\n": "§ zsh/linux if linux\n\na\nb\n\n§ zsh/linux if linux\n",
+		"A\n":    "§ zsh/linux if linux\n\nA\n\n§ zsh/linux if linux\n",
+		"b\na\n": "b\n§ zsh/linux if linux\n\na\n\n§ zsh/linux if linux\n",
+	} {
+		got, open, err := unmapped(t, srcs, live, "")
+		if err != nil || len(open) > 0 {
+			t.Fatalf("%q: %v, %v", live, err, open)
+		}
+		if got["zshrc"] != want {
+			t.Fatalf("%q: zshrc = %q, want %q", live, got["zshrc"], want)
+		}
+	}
+}

@@ -99,3 +99,31 @@ func TestEscapeRoundTrips(t *testing.T) {
 		}
 	}
 }
+
+func TestCompileHidesBlanksOfInsertsNotHere(t *testing.T) {
+	for name, tc := range map[string]struct{ src, want string }{
+		"at the start":            {"§ x if linux\n\na\n", "a\n"},
+		"at the end":              {"a\n\n§ x if linux\n", "a\n"},
+		"between paragraphs":      {"a\n\n§ x if linux\n\nb\n", "a\n\nb\n"},
+		"two in a row":            {"a\n\n§ x if linux\n§ x if linux\n\nb\n", "a\n\nb\n"},
+		"each between paragraphs": {"a\n\n§ x if linux\n\n§ x if linux\n", "a\n"},
+		"only spacing above":      {"a\n\n§ x if linux\nb\n", "a\n\nb\n"},
+		"no spacing":              {"a\n§ x if linux\nb\n", "a\nb\n"},
+		"an insert that is here":  {"a\n\n§ x if mac\n\nb\n", "a\n\nx\n\nb\n"},
+		"inside an insert":        {"a\n\n§ y\n\nb\n", "a\n\ny\n\nb\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srcs := map[string]string{"a": tc.src, "x": "x\n", "y": "y\n§ x if linux\n"}
+			c, err := compile("a", reader(srcs), []string{"mac"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := string(c.content()); got != tc.want {
+				t.Fatalf("content = %q, want %q", got, tc.want)
+			}
+			if len(c.lines) != len(c.out.lines) || len(c.gaps) != len(c.out.lines)+1 {
+				t.Fatalf("%d lines, %d origins, %d gaps", len(c.out.lines), len(c.lines), len(c.gaps))
+			}
+		})
+	}
+}
