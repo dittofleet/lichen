@@ -286,10 +286,8 @@ func Setup(url string) (string, error) {
 		return dir, err
 	}
 	settings := filepath.Join(dir, SettingsFile)
-	for _, p := range []string{settings, filepath.Join(dir, "lichen.json")} { // lichen.json: lichen 1.0
-		if _, err := os.Stat(p); err == nil {
-			return dir, nil
-		}
+	if _, err := os.Stat(settings); err == nil {
+		return dir, nil
 	}
 	if _, err := gitutil.Run(dir, "rev-parse", "--verify", "--quiet", "HEAD"); err == nil {
 		os.RemoveAll(dir)

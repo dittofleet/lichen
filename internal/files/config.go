@@ -62,25 +62,11 @@ type entry struct {
 }
 
 func loadConfig(env *core.Env) (*fileConfig, error) {
-	var old struct {
-		Sources map[string]legacySource `json:"sources"`
-	}
-	// lichen 1.0's files.json, until a pass converts it.
-	legacy, err := config.ReadJSON(env.Path("files.json"), &old)
-	if err != nil {
-		return nil, err
-	}
-	c := &fileConfig{Sources: map[string]Source{}}
-	if legacy {
-		for n, s := range old.Sources {
-			c.Sources[n] = s.source()
-		}
-		return c, nil
-	}
 	entries := map[string]entry{}
 	if _, err := config.ReadTOML(env.Path(ConfigFile), &entries); err != nil {
 		return nil, err
 	}
+	c := &fileConfig{Sources: map[string]Source{}}
 	for _, p := range slices.Sorted(maps.Keys(entries)) {
 		e := entries[p]
 		if err := e.Check(); err != nil {
@@ -117,47 +103,12 @@ func (c *fileConfig) entries() map[string]entry {
 	return entries
 }
 
-// Convert replaces lichen 1.0's files.json with files.toml.
-func Convert(env *core.Env) error {
-	return config.ConvertJSON(env.Path("files.json"), func() error {
-		c, err := loadConfig(env)
-		if err != nil {
-			return err
-		}
-		return c.save(env)
-	})
-}
-
-// legacySource is a source as lichen 1.0 wrote it, in files.json and the
-// record of deleted sources: scoped with only, which is include. Remove
-// with config.ConvertJSON.
-type legacySource struct {
-	To []struct {
-		Output
-		Only []string `json:"only"`
-	} `json:"to"`
-	Private bool `json:"private"`
-}
-
-func (l legacySource) source() Source {
-	s := Source{Private: l.Private}
-	for _, o := range l.To {
-		o.Include = append(o.Include, o.Only...)
-		s.To = append(s.To, o.Output)
-	}
-	return s
-}
-
 // loadDeleted reads the deleted sources, each with the entry it had, for
 // bringing it back.
 func loadDeleted(env *core.Env) (map[string]Source, error) {
-	var old map[string]legacySource
-	if _, err := config.ReadJSON(env.Path(deletedFile), &old); err != nil {
-		return nil, err
-	}
 	m := map[string]Source{}
-	for n, s := range old {
-		m[n] = s.source()
+	if _, err := config.ReadJSON(env.Path(deletedFile), &m); err != nil {
+		return nil, err
 	}
 	return m, nil
 }
