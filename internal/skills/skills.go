@@ -93,28 +93,23 @@ func loadConfig() (cfg *skillsConfig, exists bool, err error) {
 	if err != nil {
 		return nil, false, err
 	}
-	old, err := config.SyncPath("skills.json")
-	if err != nil {
-		return nil, false, err
-	}
-	err = config.FromJSON(old, p, func(old struct {
+	cfg = &skillsConfig{}
+	// lichen 1.0's skills.json, scoped with only, which is include.
+	var old struct {
 		Sources []struct {
 			Repo   string   `json:"repo"`
 			Skills []string `json:"skills"`
 			Only   []string `json:"only"`
 		} `json:"sources"`
 		Harnesses []string `json:"harnesses"`
-	}) any {
-		c := skillsConfig{Harnesses: old.Harnesses}
-		for _, s := range old.Sources {
-			c.Sources = append(c.Sources, Source{Repo: s.Repo, Skills: s.Skills, Scope: core.Scope{Include: s.Only}})
-		}
-		return c.file()
-	})
-	if err != nil {
-		return nil, false, err
 	}
-	cfg = &skillsConfig{}
+	if exists, err = config.LegacyJSON(legacyPath(), p, &old); err != nil || exists {
+		cfg.Harnesses = old.Harnesses
+		for _, s := range old.Sources {
+			cfg.Sources = append(cfg.Sources, Source{Repo: s.Repo, Skills: s.Skills, Scope: core.Scope{Include: s.Only}})
+		}
+		return cfg, exists, err
+	}
 	var raw map[string]toml.Primitive
 	exists, err = config.DecodeTOML(p, &raw, func(md toml.MetaData) error {
 		for _, key := range slices.Sorted(maps.Keys(raw)) {
@@ -138,6 +133,26 @@ func loadConfig() (cfg *skillsConfig, exists bool, err error) {
 		return nil, exists, err
 	}
 	return cfg, exists, nil
+}
+
+func legacyPath() string {
+	p, _ := config.SyncPath("skills.json")
+	return p
+}
+
+// Convert replaces lichen 1.0's skills.json with skills.toml.
+func Convert() error {
+	return config.ConvertJSON(legacyPath(), func() error {
+		cfg, _, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		p, err := ConfigPath()
+		if err != nil {
+			return err
+		}
+		return config.WriteTOML(p, cfg.file())
+	})
 }
 
 // file lays the config out as skills.toml does.

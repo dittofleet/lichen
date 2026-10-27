@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -275,8 +276,70 @@ func TestScopes(t *testing.T) {
 	expect(t, b, ".zshrc", "apple only\n")
 }
 
-// lichen 1.0's JSON configs become TOML, their "only" scopes "include".
-func TestFromJSON(t *testing.T) {
+// A device still on lichen 1.0's JSON doesn't convert it over a newer
+// TOML another device pushed: it converts only after a pull.
+func TestStaleJSONDoesNotRevertTOML(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	// Commits lichen.json as lichen 1.0 would, and pushes it.
+	push1 := func(groups string) {
+		a.use()
+		a.write("lichen/lichen.json", `{"groups": {"fruit": [`+groups+`]}}`)
+		os.Remove(a.path("lichen/lichen.toml"))
+		for _, args := range [][]string{
+			{"add", "-A"},
+			{"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "lichen 1.0"},
+			{"push", "-q"},
+		} {
+			if out, err := exec.Command("git", append([]string{"-C", a.path("lichen")}, args...)...).CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
+		}
+	}
+	push1(`"apple"`)
+	b := freshDevice(t, "banana")
+	if _, err := core.Setup(remote); err != nil {
+		t.Fatal(err)
+	}
+	push1(`"apple", "cherry"`)
+
+	a.sync()
+	a.change(func(env *core.Env) error { return env.EditGroup(true, "fruit", []string{"banana"}) })
+	if got := b.env().Settings.GroupsOf("banana"); len(got) != 0 {
+		t.Fatalf("banana read stale groups %v", got)
+	}
+	b.sync()
+	a.sync()
+	for _, d := range []*device{a, b} {
+		if got := d.env().Settings.Groups["fruit"]; strings.Join(got, " ") != "apple cherry banana" {
+			t.Errorf("%s: fruit = %v", d.name, got)
+		}
+	}
+}
+
+// A source deleted under lichen 1.0 comes back with its scope.
+func TestRecoverOnlyScope(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write(".vimrc", "v\n")
+	a.add(".vimrc", "apple")
+	os.Remove(a.path(".vimrc"))
+	a.sync()
+	p := a.path("lichen/.lichen/deleted.json")
+	b, _ := os.ReadFile(p)
+	os.WriteFile(p, []byte(strings.ReplaceAll(string(b), `"include":`, `"only":`)), 0o644)
+	a.change(func(env *core.Env) error {
+		_, err := files.Recover(env, []string{"vimrc"})
+		return err
+	})
+	if b, _ := os.ReadFile(a.path("lichen/files.toml")); !strings.Contains(string(b), "include = [\"apple\"]") {
+		t.Errorf("recovered vimrc lost its scope:\n%s", b)
+	}
+}
+
+// lichen 1.0's JSON configs are read as they are until a pass converts
+// them to TOML, their "only" scopes becoming "include".
+func TestConvertJSON(t *testing.T) {
 	remote := newRemote(t)
 	a := newDevice(t, remote, "apple")
 	os.Remove(a.path("lichen/lichen.toml"))
@@ -285,10 +348,21 @@ func TestFromJSON(t *testing.T) {
 		"zshrc": {"to": [{"path": "~/.zshrc", "only": ["mac"]}, {"path": "~/.bashrc"}]},
 		"netrc": {"to": [{"path": "~/.netrc"}], "private": true}
 	}}`)
+
+	// Reading converts nothing.
 	env := a.env()
-	if _, err := files.List(env); err != nil {
-		t.Fatal(err)
+	if got := strings.Join(env.Device.Groups[1:], " "); got != "fruit" {
+		t.Fatalf("groups from lichen.json = %q", got)
 	}
+	entries, err := files.List(env)
+	if err != nil || len(entries) != 2 || !slices.Equal(entries[1].Outputs[0].Include, []string{"mac"}) {
+		t.Fatalf("files from files.json = %+v, %v", entries, err)
+	}
+	if a.has("lichen/files.toml") {
+		t.Fatal("reading wrote files.toml")
+	}
+
+	a.sync()
 	for f, want := range map[string]string{
 		"lichen.toml": "[groups]\nfruit = [\"apple\", \"banana\"]\n",
 		"files.toml": `["~/.bashrc"]
@@ -309,6 +383,13 @@ include = ["mac"]
 		if a.has("lichen/" + f) {
 			t.Errorf("%s is still there", f)
 		}
+	}
+
+	// A TOML config wins over a JSON one beside it.
+	a.write("lichen/files.json", `{"sources": {"other": {"to": [{"path": "~/.other"}]}}}`)
+	a.sync()
+	if b, _ := os.ReadFile(a.path("lichen/files.toml")); strings.Contains(string(b), "other") || a.has("lichen/files.json") {
+		t.Errorf("files.json beside files.toml:\n%s", b)
 	}
 }
 

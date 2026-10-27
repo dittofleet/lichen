@@ -10,7 +10,6 @@
 package files
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"log"
@@ -63,14 +62,24 @@ type entry struct {
 }
 
 func loadConfig(env *core.Env) (*fileConfig, error) {
-	if err := fromJSON(env); err != nil {
+	var old struct {
+		Sources map[string]legacySource `json:"sources"`
+	}
+	legacy, err := config.LegacyJSON(env.Path("files.json"), env.Path(ConfigFile), &old)
+	if err != nil {
 		return nil, err
+	}
+	c := &fileConfig{Sources: map[string]Source{}}
+	if legacy {
+		for n, s := range old.Sources {
+			c.Sources[n] = s.source()
+		}
+		return c, nil
 	}
 	entries := map[string]entry{}
 	if _, err := config.ReadTOML(env.Path(ConfigFile), &entries); err != nil {
 		return nil, err
 	}
-	c := &fileConfig{Sources: map[string]Source{}}
 	for _, p := range slices.Sorted(maps.Keys(entries)) {
 		e := entries[p]
 		if err := e.Check(); err != nil {
@@ -107,44 +116,47 @@ func (c *fileConfig) entries() map[string]entry {
 	return entries
 }
 
-// fromJSON converts lichen 1.0's files.json, and the "only" scopes in
-// its record of deleted sources. Remove with config.FromJSON.
-func fromJSON(env *core.Env) error {
-	type output struct {
-		Path string   `json:"path"`
-		Only []string `json:"only"`
-	}
-	type old struct {
-		Sources map[string]struct {
-			To      []output `json:"to"`
-			Private bool     `json:"private"`
-		} `json:"sources"`
-	}
-	var deleted []byte
-	err := config.FromJSON(env.Path("files.json"), env.Path(ConfigFile), func(o old) any {
-		deleted, _ = os.ReadFile(env.Path(deletedFile))
-		c := fileConfig{Sources: map[string]Source{}}
-		for n, s := range o.Sources {
-			src := Source{Private: s.Private}
-			for _, out := range s.To {
-				src.To = append(src.To, Output{Path: out.Path, Scope: core.Scope{Include: out.Only}})
-			}
-			c.Sources[n] = src
+// Convert replaces lichen 1.0's files.json with files.toml.
+func Convert(env *core.Env) error {
+	return config.ConvertJSON(env.Path("files.json"), func() error {
+		c, err := loadConfig(env)
+		if err != nil {
+			return err
 		}
-		return c.entries()
+		return c.save(env)
 	})
-	if err != nil || deleted == nil {
-		return err
+}
+
+// legacySource is a source as lichen 1.0 wrote it, in files.json and the
+// record of deleted sources: scoped with only, which is include. Remove
+// with config.LegacyJSON.
+type legacySource struct {
+	To []struct {
+		Output
+		Only []string `json:"only"`
+	} `json:"to"`
+	Private bool `json:"private"`
+}
+
+func (l legacySource) source() Source {
+	s := Source{Private: l.Private}
+	for _, o := range l.To {
+		o.Include = append(o.Include, o.Only...)
+		s.To = append(s.To, o.Output)
 	}
-	return config.WriteFile(env.Path(deletedFile), bytes.ReplaceAll(deleted, []byte(`"only":`), []byte(`"include":`)), 0o644)
+	return s
 }
 
 // loadDeleted reads the deleted sources, each with the entry it had, for
 // bringing it back.
 func loadDeleted(env *core.Env) (map[string]Source, error) {
-	m := map[string]Source{}
-	if _, err := config.ReadJSON(env.Path(deletedFile), &m); err != nil {
+	var old map[string]legacySource
+	if _, err := config.ReadJSON(env.Path(deletedFile), &old); err != nil {
 		return nil, err
+	}
+	m := map[string]Source{}
+	for n, s := range old {
+		m[n] = s.source()
 	}
 	return m, nil
 }

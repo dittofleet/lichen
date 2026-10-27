@@ -191,23 +191,26 @@ func WriteTOML(path string, v any) error {
 	return WriteFile(path, b.Bytes(), 0o644)
 }
 
-// FromJSON converts the JSON config lichen 1.0 kept at jsonPath to the
-// TOML convert makes of it, at tomlPath. Without a JSON file it does
-// nothing. Remove once no sync folder holds one.
-func FromJSON[T any](jsonPath, tomlPath string, convert func(T) any) error {
-	var old T
-	exists, err := ReadJSON(jsonPath, &old)
-	if err != nil || !exists {
+// LegacyJSON reads into v the JSON config lichen 1.0 kept at jsonPath,
+// unless the TOML config at tomlPath has replaced it. Remove once no sync
+// folder holds one.
+func LegacyJSON(jsonPath, tomlPath string, v any) (bool, error) {
+	if _, err := os.Stat(tomlPath); err == nil {
+		return false, nil
+	}
+	return ReadJSON(jsonPath, v)
+}
+
+// ConvertJSON replaces the JSON config lichen 1.0 kept at jsonPath with
+// the TOML save writes. A TOML config already there wins.
+func ConvertJSON(jsonPath string, save func() error) error {
+	if _, err := os.Stat(jsonPath); os.IsNotExist(err) {
+		return nil
+	}
+	if err := save(); err != nil {
 		return err
 	}
-	if err := WriteTOML(tomlPath, convert(old)); err != nil {
-		return err
-	}
-	// Gone already: another process converted it at the same time.
-	if err := os.Remove(jsonPath); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
+	return os.Remove(jsonPath)
 }
 
 // WriteJSON writes v as pretty JSON.

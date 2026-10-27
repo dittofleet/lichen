@@ -27,10 +27,10 @@ const SettingsFile = "lichen.toml"
 type Settings struct {
 	// Groups names sets of devices, for scoping what goes where. Every
 	// device is also in the group named after its OS ("mac" or "linux").
-	Groups map[string][]string `toml:"groups,omitempty"`
+	Groups map[string][]string `toml:"groups,omitempty" json:"groups"`
 	// Backups keeps files lichen overwrites or deletes in
 	// ~/lichen-backups instead of removing them (see internal/backup).
-	Backups bool `toml:"backups,omitempty"`
+	Backups bool `toml:"backups,omitempty" json:"backups"`
 }
 
 // Env is one run's view of this machine: the sync folder, this device,
@@ -64,17 +64,26 @@ func Load(lg *log.Logger) (*Env, error) {
 
 // Reload re-reads the settings, as after a pull or an edit to them.
 func (e *Env) Reload() error {
-	err := config.FromJSON(e.Path("lichen.json"), e.Path(SettingsFile), func(s Settings) any { return s })
+	var s Settings
+	legacy, err := config.LegacyJSON(e.Path("lichen.json"), e.Path(SettingsFile), &s)
 	if err != nil {
 		return err
 	}
-	var s Settings
-	if _, err := config.ReadTOML(e.Path(SettingsFile), &s); err != nil {
-		return err
+	if !legacy {
+		if _, err := config.ReadTOML(e.Path(SettingsFile), &s); err != nil {
+			return err
+		}
 	}
 	e.Settings = s
 	e.Device.Groups = append([]string{osGroup()}, s.GroupsOf(e.Device.Name)...)
 	return nil
+}
+
+// ConvertSettings replaces lichen 1.0's lichen.json with lichen.toml.
+func (e *Env) ConvertSettings() error {
+	return config.ConvertJSON(e.Path("lichen.json"), func() error {
+		return config.WriteTOML(e.Path(SettingsFile), e.Settings)
+	})
 }
 
 // GroupsOf lists the custom groups a device is in, sorted.

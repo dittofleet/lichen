@@ -48,7 +48,7 @@ func Pass(env *core.Env, pull bool) error {
 			return err
 		}
 		if pulled {
-			if err := env.RecordVersion(); err != nil {
+			if err := settle(env); err != nil {
 				return err
 			}
 		}
@@ -78,6 +78,27 @@ func Local(env *core.Env) error {
 		}
 	}
 	return run(env, ms)
+}
+
+// settle runs after a pull: it records this build's version, then
+// converts lichen 1.0's JSON configs to TOML. Both go out in the same
+// push, so older builds pause before they would read the TOML, and the
+// conversion starts from the freshest JSON.
+func settle(env *core.Env) error {
+	if err := env.RecordVersion(); err != nil {
+		return err
+	}
+	for _, convert := range []func() error{
+		env.ConvertSettings,
+		func() error { return files.Convert(env) },
+		skills.Convert,
+		mcp.Convert,
+	} {
+		if err := convert(); err != nil {
+			return err
+		}
+	}
+	return env.Commit("convert configs to TOML", "")
 }
 
 // run reconciles modules, then pushes. Modules fail independently: a
@@ -119,8 +140,14 @@ func Change(env *core.Env, subject string, edit func() error) error {
 	if _, err := CommitDirect(env); err != nil {
 		return err
 	}
-	if _, err := env.Update(); err != nil {
+	pulled, err := env.Update()
+	if err != nil {
 		return err
+	}
+	if pulled {
+		if err := settle(env); err != nil {
+			return err
+		}
 	}
 	if err := edit(); err != nil {
 		return err

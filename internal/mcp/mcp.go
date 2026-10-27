@@ -99,27 +99,21 @@ func loadConfig() (cfg *mcpConfig, exists bool, err error) {
 	if err != nil {
 		return nil, false, err
 	}
-	old, err := config.SyncPath("mcp.json")
-	if err != nil {
-		return nil, false, err
-	}
-	err = config.FromJSON(old, p, func(old struct {
+	cfg = &mcpConfig{Servers: map[string]Server{}}
+	// lichen 1.0's mcp.json, scoped with only, which is include.
+	var old struct {
 		Servers map[string]struct {
 			Server
 			Only []string `json:"only"`
 		} `json:"servers"`
-	}) any {
-		servers := map[string]Server{}
-		for name, s := range old.Servers {
-			s.Server.Scope = core.Scope{Include: s.Only}
-			servers[name] = s.Server
-		}
-		return servers
-	})
-	if err != nil {
-		return nil, false, err
 	}
-	cfg = &mcpConfig{Servers: map[string]Server{}}
+	if exists, err = config.LegacyJSON(legacyPath(), p, &old); err != nil || exists {
+		for name, s := range old.Servers {
+			s.Include = s.Only
+			cfg.Servers[name] = s.Server
+		}
+		return cfg, exists, err
+	}
 	if exists, err = config.ReadTOML(p, &cfg.Servers); err != nil {
 		return nil, exists, err
 	}
@@ -129,6 +123,22 @@ func loadConfig() (cfg *mcpConfig, exists bool, err error) {
 		}
 	}
 	return cfg, exists, nil
+}
+
+func legacyPath() string {
+	p, _ := config.SyncPath("mcp.json")
+	return p
+}
+
+// Convert replaces lichen 1.0's mcp.json with mcp.toml.
+func Convert() error {
+	return config.ConvertJSON(legacyPath(), func() error {
+		cfg, _, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		return saveServers(cfg.Servers)
+	})
 }
 
 // saveServers rewrites mcp.toml.
