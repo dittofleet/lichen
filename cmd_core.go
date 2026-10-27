@@ -189,6 +189,7 @@ func cmdDevices() error {
 			}
 		}
 	}
+	oses, _ := events.OSes()
 	width := 0
 	for _, d := range devices {
 		width = max(width, len(d.Name))
@@ -201,7 +202,13 @@ func cmdDevices() error {
 		case !d.Online && i < known:
 			note = " (away)"
 		}
-		fmt.Printf("%-*s  %s%s\n", width, d.Name, strings.Join(env.Settings.GroupsOf(d.Name), ", "), dim(note))
+		groups := env.Settings.GroupsOf(d.Name)
+		if d.Self {
+			groups = env.Device.Groups
+		} else if os := oses[d.Name]; os != "" {
+			groups = append([]string{os}, groups...)
+		}
+		fmt.Printf("%-*s  %s%s\n", width, d.Name, strings.Join(groups, ", "), dim(note))
 	}
 	return nil
 }

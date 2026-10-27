@@ -500,3 +500,39 @@ func Broken(env *core.Env) []Hold {
 	}
 	return out
 }
+
+// Preview compiles a file of the sync folder as d would write it: one
+// named by source (a piece too), or by an output path. off is set when
+// it has outputs, but none reach d.
+func Preview(env *core.Env, target string, d core.Device) (content []byte, off bool, err error) {
+	c, err := loadConfig(env)
+	if err != nil {
+		return nil, false, err
+	}
+	file := target
+	if fi, err := os.Stat(sourcePath(env, file)); err != nil || fi.IsDir() {
+		abs, err := config.Abs(target)
+		if err != nil {
+			return nil, false, err
+		}
+		n, o, ok := owner(c, abs)
+		root, _ := o.root()
+		if !ok || !config.Within(abs, root) {
+			return nil, false, fmt.Errorf("%s is not a source file or an output (see: lichen files)", target)
+		}
+		rel, _ := filepath.Rel(root, abs)
+		file = path.Join(n, filepath.ToSlash(rel))
+	}
+	comp, err := compile(file, func(name string) ([]byte, error) {
+		return os.ReadFile(sourcePath(env, name))
+	}, d.Names())
+	if err != nil {
+		return nil, false, err
+	}
+	for n, s := range c.Sources {
+		if file == n || strings.HasPrefix(file, n+"/") {
+			off = !slices.ContainsFunc(s.To, func(o Output) bool { return d.In(o.Scope) })
+		}
+	}
+	return comp.content(), off, nil
+}

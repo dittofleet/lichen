@@ -73,7 +73,7 @@ func (e *Env) Reload() error {
 		return err
 	}
 	e.Settings = s
-	e.Device.Groups = append([]string{osGroup()}, s.GroupsOf(e.Device.Name)...)
+	e.Device = s.Device(e.Device.Name, OS())
 	return nil
 }
 
@@ -175,7 +175,14 @@ func (d Device) named(names []string) bool {
 	return slices.ContainsFunc(names, func(n string) bool { return n == d.Name || slices.Contains(d.Groups, n) })
 }
 
-func osGroup() string {
+// Device is the device named name, running os ("mac" or "linux"), in
+// the groups s puts it in.
+func (s Settings) Device(name, os string) Device {
+	return Device{Name: name, Groups: append([]string{os}, s.GroupsOf(name)...)}
+}
+
+// OS is this device's OS group: "mac" or "linux".
+func OS() string {
 	if runtime.GOOS == "darwin" {
 		return "mac"
 	}

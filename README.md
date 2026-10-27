@@ -84,8 +84,8 @@ Skills and MCP servers work the same way, and [inserts](#inserts) use
 `if` and `unless`. A device that falls out of scope keeps its files as
 plain files and uninstalls its skills and servers.
 
-`lichen devices` lists device names (crosstalk's). `mac` and `linux` are
-built-in groups. Custom groups are stored in `~/lichen/lichen.toml`:
+`lichen devices` lists device names (crosstalk's) and their groups. `mac`
+and `linux` are built-in groups. Custom groups are stored in `~/lichen/lichen.toml`:
 
 ```sh
 lichen groups add servers hetzner-1 hetzner-2
@@ -105,7 +105,9 @@ and editing either side syncs: the output (`~/.zshrc`) or the source
 (`~/lichen/files/shell/zshrc`). A directory syncs as a whole, including
 files added to it later.
 
-`lichen files` shows every source and where it goes.
+`lichen files` shows every source and where it goes, and `lichen files
+preview <source|path> [<device>]` prints a file as a device writes it,
+with its [inserts](#inserts) settled for that device.
 
 ### Several outputs
 

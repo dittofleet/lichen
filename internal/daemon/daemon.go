@@ -99,6 +99,9 @@ func Run() error {
 		func() {
 			lastErr = ""
 			lg.Printf("events: connected, catching up")
+			if err := events.PostOS(core.OS()); err != nil {
+				lg.Printf("events: posting this device's OS: %v", err)
+			}
 			started.Store(true)
 			poke(pulls)
 		},

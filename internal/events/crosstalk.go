@@ -124,6 +124,46 @@ func Announce() error {
 	return c.Close()
 }
 
+// deviceValue is the value each lichen daemon posts about its device.
+const deviceValue = "lichen:device"
+
+// PostOS posts this device's OS (core.OS) for the others to read, which
+// crosstalk keeps for them while this one sleeps.
+func PostOS(os string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	body, _ := json.Marshal(map[string]string{"os": os})
+	c, _, err := open(ctx, request{Op: "post", Name: deviceValue, Body: body}, nil)
+	if err != nil {
+		return err
+	}
+	return c.Close()
+}
+
+// OSes reads the OS each device posted, by device name.
+func OSes() (map[string]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var res struct {
+		Entries []struct {
+			Device string `json:"device"`
+			Value  struct {
+				OS string `json:"os"`
+			} `json:"value"`
+		} `json:"entries"`
+	}
+	c, _, err := open(ctx, request{Op: "read", To: "*", Name: deviceValue}, &res)
+	if err != nil {
+		return nil, err
+	}
+	c.Close()
+	oses := map[string]string{}
+	for _, e := range res.Entries {
+		oses[e.Device] = e.Value.OS
+	}
+	return oses, nil
+}
+
 // Device is one machine on the crosstalk hub.
 type Device struct {
 	Name   string `json:"name"`
