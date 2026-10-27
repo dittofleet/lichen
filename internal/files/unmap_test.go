@@ -170,3 +170,39 @@ func TestDiff(t *testing.T) {
 		}
 	}
 }
+
+// A blank line hidden with an insert not here is still in the source.
+// Lines added beside it go on its far side from the insert, and editing
+// the blank line left beside it takes it along, so what a device shows
+// after a recompile is what was typed there.
+func TestUnmapBesideHiddenBlanks(t *testing.T) {
+	const top, mid = "§ l if linux\n\na\n\n§ l if linux\n", "a\n\n§ l if linux\n\nb\n"
+	for _, tc := range []struct{ src, live, want string }{
+		{top, "a\nb\n", "§ l if linux\n\na\nb\n\n§ l if linux\n"},
+		{top, "A\n", "§ l if linux\n\nA\n\n§ l if linux\n"},
+		{top, "b\na\n", "§ l if linux\n\nb\na\n\n§ l if linux\n"},
+		{mid, "a\nb\n", "a\n§ l if linux\nb\n"},
+		{mid, "a\nx\nb\n", "a\n§ l if linux\nx\nb\n"},
+		{mid, "a\n\nx\nb\n", "a\n\n§ l if linux\n\nx\nb\n"},
+		{mid, "a\nx\n\nb\n", "a\nx\n\n§ l if linux\n\nb\n"},
+		{"a\n\n§ l if linux\n\n§ l if linux\n\nb\n", "a\nb\n", "a\n§ l if linux\n§ l if linux\nb\n"},
+		{"\n§ l if linux\n§ l if linux\n\n\n", "q\n", "§ l if linux\n§ l if linux\nq\n"},
+	} {
+		srcs := map[string]string{"zshrc": tc.src, "l": "l\n"}
+		got, open, err := unmapped(t, srcs, tc.live, "")
+		if err != nil || len(open) > 0 {
+			t.Fatalf("%q, %q: %v, %v", tc.src, tc.live, err, open)
+		}
+		if got["zshrc"] != tc.want {
+			t.Fatalf("%q, %q: zshrc = %q, want %q", tc.src, tc.live, got["zshrc"], tc.want)
+		}
+		srcs["zshrc"] = got["zshrc"]
+		c, err := compile("zshrc", reader(srcs), []string{"mac"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(c.content()) != tc.live {
+			t.Fatalf("%q, %q: recompiles to %q", tc.src, tc.live, c.content())
+		}
+	}
+}

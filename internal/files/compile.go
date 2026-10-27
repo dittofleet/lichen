@@ -113,6 +113,9 @@ type compiled struct {
 	deps    map[string][]byte
 	inserts bool
 	groups  []string
+	// spacing pairs a blank line of the output with those hidden beside
+	// it (see hideBlank), which go when it is edited.
+	spacing map[pos][]pos
 }
 
 func (c *compiled) content() []byte {
@@ -125,7 +128,7 @@ func (c *compiled) content() []byte {
 // compile compiles file for a device answering to names
 // (core.Device.Names), reading sources through read.
 func compile(file string, read func(string) ([]byte, error), names []string) (*compiled, error) {
-	c := &compiled{file: file, deps: map[string][]byte{}, gaps: [][]pos{nil}, groups: names}
+	c := &compiled{file: file, deps: map[string][]byte{}, gaps: [][]pos{nil}, groups: names, spacing: map[pos][]pos{}}
 	top, err := read(file)
 	if err != nil {
 		return nil, err
@@ -136,6 +139,7 @@ func compile(file string, read func(string) ([]byte, error), names []string) (*c
 		return c, nil
 	}
 	in := core.Device{Groups: names}.In
+	var skipped []int // the gaps where an insert is not here
 
 	var walk func(name string, inside []string) error
 	walk = func(name string, inside []string) error {
@@ -168,10 +172,10 @@ func compile(file string, read func(string) ([]byte, error), names []string) (*c
 				if slices.Contains(chain, ins) {
 					return fmt.Errorf("inserts go in a circle: %s", strings.Join(append(chain, ins), " > "))
 				}
-				if in(scope) {
-					if err := walk(ins, chain); err != nil {
-						return err
-					}
+				if !in(scope) {
+					skipped = append(skipped, len(c.out.lines))
+				} else if err := walk(ins, chain); err != nil {
+					return err
 				}
 			default:
 				c.emit(l, pos{name, i})
@@ -186,7 +190,41 @@ func compile(file string, read func(string) ([]byte, error), names []string) (*c
 	if err := walk(file, nil); err != nil {
 		return nil, err
 	}
+	for _, g := range slices.Backward(skipped) {
+		c.hideBlank(g)
+	}
 	return c, nil
+}
+
+// hideBlank drops a blank line at the gap of an insert that is not here,
+// where it would otherwise double up or start or end the file: the
+// spacing around the insert, which goes with it. The line above goes if
+// it can, else the one below.
+func (c *compiled) hideBlank(gap int) {
+	if len(c.out.lines) == 0 {
+		return
+	}
+	blank := func(i int) bool { return i < 0 || i >= len(c.out.lines) || strings.TrimSpace(c.out.lines[i]) == "" }
+	above, below := gap-1, gap
+	if !blank(above) || !blank(below) {
+		return
+	}
+	i := max(above, 0)
+	hidden := c.lines[i]
+	if above >= 0 && below < len(c.out.lines) {
+		c.spacing[c.lines[below]] = append(c.spacing[c.lines[below]], append(c.spacing[hidden], hidden)...)
+	}
+	delete(c.spacing, hidden)
+	c.out.lines = slices.Delete(c.out.lines, i, i+1)
+	c.lines = slices.Delete(c.lines, i, i+1)
+	// Lines added here go on the far side of the hidden one from the
+	// insert, which keeps it hidden.
+	if i == above {
+		c.gaps[i] = append(c.gaps[i], c.gaps[i+1]...)
+	} else {
+		c.gaps[i] = append(c.gaps[i+1], c.gaps[i]...)
+	}
+	c.gaps = slices.Delete(c.gaps, i+1, i+2)
 }
 
 func (c *compiled) emit(line string, from pos) {

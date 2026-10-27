@@ -140,6 +140,9 @@ on lychee and the servers, and `zsh/gui` everywhere but the servers. A
 piece can insert others, and needs no output of its own. A line meant to
 start with `§` starts with `§§` in the source.
 
+Where an insert is skipped, a blank line beside it goes too if it would
+otherwise be doubled, or start or end the file.
+
 Outputs show none of this, and editing them still syncs: lichen knows
 which source each line came from, and an edited line goes back there.
 New lines go to the source of the lines around them. Where an insert

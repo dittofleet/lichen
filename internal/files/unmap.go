@@ -38,6 +38,16 @@ func unmap(base *compiled, live text, choose func(question) (pos, bool)) (map[st
 		}
 		return eds[file]
 	}
+	// An edit to a blank line takes those hidden beside it along, or a
+	// recompile would show one in its place.
+	change := func(o pos, lines []string) error {
+		for _, h := range base.spacing[o] {
+			if err := set(ed(h.file).repl, h.line, nil); err != nil {
+				return err
+			}
+		}
+		return set(ed(o.file).repl, o.line, lines)
+	}
 	var open []question
 	for _, h := range hunks {
 		old := base.lines[h.a : h.a+h.b]
@@ -48,14 +58,14 @@ func unmap(base *compiled, live text, choose func(question) (pos, bool)) (map[st
 				if base.out.lines[h.a+i] == added[i] {
 					continue
 				}
-				if err := set(ed(o.file).repl, o.line, lines[i:i+1]); err != nil {
+				if err := change(o, lines[i:i+1]); err != nil {
 					return nil, nil, err
 				}
 			}
 			continue
 		}
 		for _, o := range old {
-			if err := set(ed(o.file).repl, o.line, nil); err != nil {
+			if err := change(o, nil); err != nil {
 				return nil, nil, err
 			}
 		}
