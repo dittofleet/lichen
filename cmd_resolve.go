@@ -30,13 +30,13 @@ func cmdResolve(args []string) error {
 			}
 		default:
 			if strings.HasPrefix(a, "-") || p != "" {
-				return usage("resolve")
+				return usage("resolve", "")
 			}
 			p = a
 		}
 	}
 	if (p == "") != (keep == "" && into == nil) {
-		return usage("resolve")
+		return usage("resolve", "")
 	}
 	if p != "" {
 		return resolve(p, keep, into)
@@ -48,7 +48,7 @@ func cmdResolve(args []string) error {
 		return nil
 	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return usage("resolve")
+		return usage("resolve", "")
 	}
 	env, err := core.Load(clilog())
 	if err != nil {

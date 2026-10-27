@@ -123,7 +123,9 @@ func loadConfig() (cfg *skillsConfig, exists bool, err error) {
 				err = md.PrimitiveDecode(raw[key], &cfg.Harnesses)
 			} else {
 				src := Source{Repo: key}
-				err = md.PrimitiveDecode(raw[key], &src)
+				if err = md.PrimitiveDecode(raw[key], &src); err == nil {
+					err = src.Check()
+				}
 				cfg.Sources = append(cfg.Sources, src)
 			}
 			if err != nil {

@@ -181,9 +181,9 @@ func cmdMCP(args []string) error {
 }
 
 func cmdMCPAdd(args []string) error {
-	usage := usage("mcp", "add")
+	errUsage := usage("mcp", "add")
 	if len(args) < 2 {
-		return usage
+		return errUsage
 	}
 	// Flags go before the command: whatever follows it is its own.
 	name, rest := args[0], args[1:]
@@ -200,7 +200,7 @@ func cmdMCPAdd(args []string) error {
 		rest = rest[1:]
 	}
 	if len(rest) == 0 {
-		return usage
+		return errUsage
 	}
 	s := mcp.Server{Command: rest[0], Args: rest[1:]}
 	if mcp.IsURL(rest[0]) {

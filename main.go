@@ -36,7 +36,12 @@ func main() {
 	// `lichen <command> --help` and `lichen <command> <sub> --help`.
 	for i := 1; i < len(args) && i <= 2; i++ {
 		if isHelp(args[i]) {
-			if err := printHelp(args[:i]); err != nil {
+			// After an argument that is no subcommand, the command's page.
+			err := printHelp(args[:i])
+			if err != nil && i == 2 {
+				err = printHelp(args[:1])
+			}
+			if err != nil {
 				log.Fatalf("lichen: %v", err)
 			}
 			return

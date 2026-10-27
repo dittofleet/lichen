@@ -147,6 +147,14 @@ type Scope struct {
 	Exclude []string `toml:"exclude,omitempty" json:"exclude,omitempty"`
 }
 
+// Check refuses a scope that both includes and excludes.
+func (s Scope) Check() error {
+	if len(s.Include) > 0 && len(s.Exclude) > 0 {
+		return errors.New("use include or exclude, not both")
+	}
+	return nil
+}
+
 // Everywhere reports whether the scope is every device.
 func (s Scope) Everywhere() bool { return len(s.Include) == 0 && len(s.Exclude) == 0 }
 

@@ -123,6 +123,11 @@ func loadConfig() (cfg *mcpConfig, exists bool, err error) {
 	if exists, err = config.ReadTOML(p, &cfg.Servers); err != nil {
 		return nil, exists, err
 	}
+	for name, s := range cfg.Servers {
+		if err := s.Check(); err != nil {
+			return nil, exists, fmt.Errorf("%s: %s: %w", ConfigFile, name, err)
+		}
+	}
 	return cfg, exists, nil
 }
 

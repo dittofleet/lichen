@@ -31,7 +31,7 @@ import (
 
 func cmdSetup(args []string) error {
 	if len(args) > 1 {
-		return usage("setup")
+		return usage("setup", "")
 	}
 	url := ""
 	if len(args) == 1 {
@@ -212,7 +212,7 @@ func cmdGroups(args []string) error {
 		return cmdGroupsList()
 	}
 	if (args[0] != "add" && args[0] != "remove" && args[0] != "rm") || len(args) < 2 || (args[0] == "add" && len(args) < 3) {
-		return usage("groups")
+		return usage("groups", "")
 	}
 	op, group, members := args[0], args[1], args[2:]
 	subject := strings.TrimSpace(fmt.Sprintf("groups: %s %s %s", op, group, strings.Join(members, " ")))
@@ -292,7 +292,7 @@ func cmdDaemonCtl(action string) error {
 func cmdUninstall(args []string) error {
 	yes := len(args) == 1 && (args[0] == "--yes" || args[0] == "-y")
 	if len(args) > 0 && !yes {
-		return usage("uninstall")
+		return usage("uninstall", "")
 	}
 	data, err := config.DataDir()
 	if err != nil {

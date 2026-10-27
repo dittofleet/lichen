@@ -193,12 +193,12 @@ func (c helpCmd) forms(sub string) []helpSub {
 
 // usage is the error for a command used wrong, showing its usage as the
 // help has it: a subcommand's forms, or the command's.
-func usage(name string, sub ...string) error {
+func usage(name, sub string) error {
 	c, _ := findCmd(name)
 	lines := []string{"lichen " + c.usage}
 	if len(c.subs) > 0 {
 		lines = nil
-		for _, s := range c.forms(strings.Join(sub, "")) {
+		for _, s := range c.forms(sub) {
 			lines = append(lines, "lichen "+s.usage)
 		}
 	}

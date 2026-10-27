@@ -73,6 +73,9 @@ func loadConfig(env *core.Env) (*fileConfig, error) {
 	c := &fileConfig{Sources: map[string]Source{}}
 	for _, p := range slices.Sorted(maps.Keys(entries)) {
 		e := entries[p]
+		if err := e.Check(); err != nil {
+			return nil, fmt.Errorf("%s: %s: %w", ConfigFile, p, err)
+		}
 		n := e.Source
 		if n == "" {
 			n = sourceName(p)

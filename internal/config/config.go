@@ -203,7 +203,11 @@ func FromJSON[T any](jsonPath, tomlPath string, convert func(T) any) error {
 	if err := WriteTOML(tomlPath, convert(old)); err != nil {
 		return err
 	}
-	return os.Remove(jsonPath)
+	// Gone already: another process converted it at the same time.
+	if err := os.Remove(jsonPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // WriteJSON writes v as pretty JSON.
