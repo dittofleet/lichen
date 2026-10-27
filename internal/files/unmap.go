@@ -38,10 +38,10 @@ func unmap(base *compiled, live text, choose func(question) (pos, bool)) (map[st
 		}
 		return eds[file]
 	}
-	// An edit to a blank line takes the one hidden beside it along, or a
-	// recompile would show that one in its place.
+	// An edit to a blank line takes those hidden beside it along, or a
+	// recompile would show one in its place.
 	change := func(o pos, lines []string) error {
-		if h, ok := base.spacing[o]; ok {
+		for _, h := range base.spacing[o] {
 			if err := set(ed(h.file).repl, h.line, nil); err != nil {
 				return err
 			}
