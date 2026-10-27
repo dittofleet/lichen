@@ -191,18 +191,6 @@ func WriteTOML(path string, v any) error {
 	return WriteFile(path, b.Bytes(), 0o644)
 }
 
-// ConvertJSON replaces the JSON config lichen 1.0 kept at jsonPath with
-// the TOML save writes from it. Remove once no sync folder holds one.
-func ConvertJSON(jsonPath string, save func() error) error {
-	if _, err := os.Stat(jsonPath); os.IsNotExist(err) {
-		return nil
-	}
-	if err := save(); err != nil {
-		return err
-	}
-	return os.Remove(jsonPath)
-}
-
 // WriteJSON writes v as pretty JSON.
 func WriteJSON(path string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")

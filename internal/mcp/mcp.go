@@ -100,20 +100,6 @@ func loadConfig() (cfg *mcpConfig, exists bool, err error) {
 		return nil, false, err
 	}
 	cfg = &mcpConfig{Servers: map[string]Server{}}
-	// lichen 1.0's mcp.json, until a pass converts it. Its only is include.
-	var old struct {
-		Servers map[string]struct {
-			Server
-			Only []string `json:"only"`
-		} `json:"servers"`
-	}
-	if exists, err = config.ReadJSON(legacyPath(), &old); err != nil || exists {
-		for name, s := range old.Servers {
-			s.Include = s.Only
-			cfg.Servers[name] = s.Server
-		}
-		return cfg, exists, err
-	}
 	if exists, err = config.ReadTOML(p, &cfg.Servers); err != nil {
 		return nil, exists, err
 	}
@@ -123,22 +109,6 @@ func loadConfig() (cfg *mcpConfig, exists bool, err error) {
 		}
 	}
 	return cfg, exists, nil
-}
-
-func legacyPath() string {
-	p, _ := config.SyncPath("mcp.json")
-	return p
-}
-
-// Convert replaces lichen 1.0's mcp.json with mcp.toml.
-func Convert() error {
-	return config.ConvertJSON(legacyPath(), func() error {
-		cfg, _, err := loadConfig()
-		if err != nil {
-			return err
-		}
-		return saveServers(cfg.Servers)
-	})
 }
 
 // saveServers rewrites mcp.toml.
