@@ -29,20 +29,21 @@ func (e *Env) Origin() string {
 
 // hasUpstream reports whether the branch tracks one on origin. A clone
 // of an empty repo has none until its first push, or until another
-// device's push creates the branch, which is picked up here.
-func (e *Env) hasUpstream() bool {
+// device's push creates the branch, which is picked up here. A failed
+// fetch is an error: there may be a branch it couldn't see.
+func (e *Env) hasUpstream() (bool, error) {
 	if _, err := e.Git("rev-parse", "--abbrev-ref", "@{u}"); err == nil {
-		return true
+		return true, nil
 	}
 	branch, err := e.Git("branch", "--show-current")
 	if err != nil || branch == "" {
-		return false
+		return false, nil
 	}
 	if _, err := e.Git("fetch", "--quiet", "origin"); err != nil {
-		return false
+		return false, err
 	}
 	_, err = e.Git("branch", "--quiet", "--set-upstream-to=origin/"+branch)
-	return err == nil
+	return err == nil, nil
 }
 
 func (e *Env) rebasing() bool {
@@ -72,8 +73,11 @@ func (e *Env) abortStaleRebase() {
 // branch exists nowhere but here.
 func (e *Env) pull() error {
 	e.abortStaleRebase()
-	if e.Origin() == "" || !e.hasUpstream() {
+	if e.Origin() == "" {
 		return nil
+	}
+	if up, err := e.hasUpstream(); err != nil || !up {
+		return err
 	}
 	_, err := e.Git("pull", "--rebase", "-X", "theirs", "--quiet")
 	if err != nil && e.rebasing() {
@@ -219,7 +223,7 @@ func (e *Env) Push() error {
 	if e.Origin() == "" {
 		return nil
 	}
-	if e.hasUpstream() {
+	if up, _ := e.hasUpstream(); up {
 		if out, err := e.Git("rev-list", "--count", "@{u}..HEAD"); err != nil || out == "0" {
 			return nil
 		}

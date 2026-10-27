@@ -400,8 +400,15 @@ func TestNoChangesBeforeConversion(t *testing.T) {
 	remote := newRemote(t)
 	a := newDevice(t, remote, "apple")
 	a.write("lichen/lichen.json", `{"groups": {"fruit": ["apple"]}}`)
-	if out, err := exec.Command("git", "-C", a.path("lichen"), "remote", "set-url", "origin", filepath.Join(t.TempDir(), "gone.git")).CombinedOutput(); err != nil {
-		t.Fatalf("%v\n%s", err, out)
+	// Offline, and with no upstream, as a clone of an empty repo starts:
+	// a fetch that fails is no pull.
+	for _, args := range [][]string{
+		{"remote", "set-url", "origin", filepath.Join(t.TempDir(), "gone.git")},
+		{"branch", "--unset-upstream"},
+	} {
+		if out, err := exec.Command("git", append([]string{"-C", a.path("lichen")}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
 	}
 	env := a.env()
 	err := module.Change(env, "test", func() error { return env.EditGroup(true, "fruit", []string{"banana"}) })
