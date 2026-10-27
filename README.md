@@ -55,10 +55,11 @@ The configs have one entry per output, repo or server:
 ```toml
 # files.toml
 ["~/.zshrc"]
+source = "shell/zshrc"
 include = ["mac"]
 
 ["~/.codex/AGENTS.md"]
-source = "claude/CLAUDE.md"   # only when not named after the path
+source = "agents/CLAUDE.md"
 ```
 
 Edit anything in it and lichen commits and pushes it. You never run git
@@ -70,8 +71,8 @@ Everything syncs to every device unless scoped. A scope is a list of
 devices and groups, either included or excluded:
 
 ```sh
-lichen files add ~/.zshrc --include mac,lychee
-lichen files add ~/.vimrc --exclude servers
+lichen files add ~/.zshrc shell/zshrc --include mac,lychee
+lichen files add ~/.vimrc vim/vimrc --exclude servers
 lichen files include ~/.zshrc mac   # change it later
 lichen files exclude ~/.zshrc       # every device again
 ```
@@ -92,14 +93,13 @@ lichen groups                            # list groups
 ## Files
 
 ```sh
-lichen files add ~/.zshrc ~/.claude/CLAUDE.md
+lichen files add ~/.zshrc shell/zshrc
 ```
 
-Each path becomes a source in `~/lichen/files` (`zshrc`,
-`claude/CLAUDE.md`: leading dots are dropped), with an output where it
-came from. Every device writes the outputs meant for it, and editing
-either side syncs: the output (`~/.zshrc`) or the source
-(`~/lichen/files/zshrc`). A directory syncs as a whole, including files
+The path becomes a source in `~/lichen/files`, under the name given,
+with an output where it came from. Every device writes the outputs meant
+for it, and editing either side syncs: the output (`~/.zshrc`) or the
+source (`~/lichen/files/shell/zshrc`). A directory syncs as a whole, including files
 added to it later.
 
 `lichen files` shows every source and where it goes.
@@ -110,8 +110,8 @@ One source can have several outputs, each with its own
 [scope](#which-devices-get-what):
 
 ```sh
-lichen files add ~/.codex/AGENTS.md --to claude/CLAUDE.md
-lichen files add ~/.config/agents.md --to claude/CLAUDE.md --include linux
+lichen files add ~/.codex/AGENTS.md --to agents/CLAUDE.md
+lichen files add ~/.config/agents.md --to agents/CLAUDE.md --include linux
 ```
 
 Edit any of them and the others follow. `lichen files include` and

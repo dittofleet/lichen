@@ -118,11 +118,15 @@ func (d *device) has(rel string) bool {
 	return err == nil
 }
 
+// add syncs ~/rel as the source rel names without its leading dots.
 func (d *device) add(rel string, include ...string) {
 	d.t.Helper()
+	parts := strings.Split(rel, "/")
+	for i, p := range parts {
+		parts[i] = strings.TrimLeft(p, ".")
+	}
 	d.change(func(env *core.Env) error {
-		_, err := files.Add(env, []string{"~/" + rel}, "", core.Scope{Include: include})
-		return err
+		return files.Add(env, "~/"+rel, strings.Join(parts, "/"), core.Scope{Include: include})
 	})
 }
 
@@ -414,6 +418,7 @@ func TestOutputsOutsideHomeAreIgnored(t *testing.T) {
 	outside := filepath.Join(filepath.Dir(a.home), "outside-"+filepath.Base(a.home))
 	t.Cleanup(func() { os.Remove(outside) })
 	a.write("lichen/files.toml", `["~/.zshrc"]
+source = "zshrc"
 ["~/../`+filepath.Base(outside)+`"]
 source = "zshrc"
 ["~/lichen/zshrc"]
@@ -669,17 +674,17 @@ func TestOverlappingAddsAreRefused(t *testing.T) {
 	a.add(".claude/commands")
 	env := a.env()
 	for _, p := range []string{"~/.claude/commands/one.md", "~/.claude", "~/lichen/files.toml"} {
-		if _, err := files.Add(env, []string{p}, "", core.Scope{}); err == nil {
+		if err := files.Add(env, p, "x", core.Scope{}); err == nil {
 			t.Errorf("adding %s: expected a refusal", p)
 		}
 	}
 
 	// Nor may one source's name sit inside another's (claude/commands
-	// here): ~/claude would be the source claude.
+	// here), or be another's, or be no name.
 	a.write("claude/notes.md", "n")
 	a.write(".claude/settings.json", "{}")
-	for p, name := range map[string]string{"~/claude": "", "~/.claude/settings.json": "claude/commands/x"} {
-		if _, err := files.Add(env, []string{p}, name, core.Scope{}); err == nil {
+	for p, name := range map[string]string{"~/claude": "claude", "~/.claude/settings.json": "claude/commands/x", "~/claude/notes.md": "claude/commands", "~/.vimrc": ""} {
+		if err := files.Add(env, p, name, core.Scope{}); err == nil {
 			t.Errorf("adding %s as %q: expected a refusal", p, name)
 		}
 	}
