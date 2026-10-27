@@ -189,3 +189,32 @@ func TestUnmapBesideAHiddenBlank(t *testing.T) {
 		}
 	}
 }
+
+// Editing the blank line left beside a hidden one takes that one along,
+// so it doesn't show up in its place.
+func TestUnmapSpacingBesideAHiddenBlank(t *testing.T) {
+	srcs := map[string]string{"zshrc": "a\n\n§ zsh/linux if linux\n\nb\n", "zsh/linux": "l\n"}
+	for live, want := range map[string]string{
+		"a\nb\n":      "a\n§ zsh/linux if linux\nb\n",
+		"a\nx\nb\n":   "a\n§ zsh/linux if linux\nx\nb\n",
+		"a\n\nx\nb\n": "a\n\n§ zsh/linux if linux\n\nx\nb\n",
+		"a\nx\n\nb\n": "a\nx\n\n§ zsh/linux if linux\n\nb\n",
+		"a\n\n\nb\n":  "a\n\n§ zsh/linux if linux\n\n\nb\n",
+	} {
+		got, open, err := unmapped(t, srcs, live, "")
+		if err != nil || len(open) > 0 {
+			t.Fatalf("%q: %v, %v", live, err, open)
+		}
+		if got["zshrc"] != want {
+			t.Fatalf("%q: zshrc = %q, want %q", live, got["zshrc"], want)
+		}
+		// What the device shows after a recompile is what was typed.
+		c, err := compile("zshrc", reader(map[string]string{"zshrc": got["zshrc"], "zsh/linux": "l\n"}), []string{"mac"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(c.content()) != live {
+			t.Fatalf("%q recompiles to %q", live, c.content())
+		}
+	}
+}

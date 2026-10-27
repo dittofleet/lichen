@@ -113,6 +113,9 @@ type compiled struct {
 	deps    map[string][]byte
 	inserts bool
 	groups  []string
+	// spacing pairs a blank line of the output with the one hidden
+	// beside it (see hideBlank), which goes when it is edited.
+	spacing map[pos]pos
 }
 
 func (c *compiled) content() []byte {
@@ -125,7 +128,7 @@ func (c *compiled) content() []byte {
 // compile compiles file for a device answering to names
 // (core.Device.Names), reading sources through read.
 func compile(file string, read func(string) ([]byte, error), names []string) (*compiled, error) {
-	c := &compiled{file: file, deps: map[string][]byte{}, gaps: [][]pos{nil}, groups: names}
+	c := &compiled{file: file, deps: map[string][]byte{}, gaps: [][]pos{nil}, groups: names, spacing: map[pos]pos{}}
 	top, err := read(file)
 	if err != nil {
 		return nil, err
@@ -209,6 +212,9 @@ func (c *compiled) hideBlank(gap int) {
 	}
 	if i >= len(c.out.lines) {
 		return
+	}
+	if i == above && below < len(c.out.lines) {
+		c.spacing[c.lines[below]] = c.lines[above]
 	}
 	c.out.lines = slices.Delete(c.out.lines, i, i+1)
 	c.lines = slices.Delete(c.lines, i, i+1)
