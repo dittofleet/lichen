@@ -74,7 +74,7 @@ func setup(url string) error {
 // LICHEN_REPO skips the question.
 func cmdPostinstall() error {
 	return postinstall.Run(app.New(), func() error {
-		if _, err := core.Load(clilog()); err == nil {
+		if _, err := core.Load(clilog()); !errors.Is(err, core.ErrNotSetUp) {
 			binary, err := clikit.Executable()
 			if err != nil {
 				return err

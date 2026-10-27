@@ -972,7 +972,7 @@ func TestPreview(t *testing.T) {
 	}{
 		{"zshrc", kiwi, "top\non linux\n", false},
 		{"~/.zshrc", kiwi, "top\non linux\n", false},
-		{"zshrc", env.Device, "top\n", false},
+		{"zshrc", core.Device{Name: "apple", Groups: []string{"mac"}}, "top\n", false},
 		{"pieces/linux", kiwi, "on linux\n", false},
 		{"vimrc", kiwi, "set nu\n", true},
 		{"claude/commands/one.md", kiwi, "1\n", false},
@@ -983,7 +983,9 @@ func TestPreview(t *testing.T) {
 			t.Errorf("preview %s on %s = %q, %v, %v; want %q, %v", tc.target, tc.d.Name, got, off, err, tc.want, tc.off)
 		}
 	}
-	if _, _, err := files.Preview(env, "nope", kiwi); err == nil {
-		t.Error("previewing nothing: expected an error")
+	for _, target := range []string{"nope", "~/.claude/commands", "~/.claude/commands/new.md", "../.zshrc"} {
+		if _, _, err := files.Preview(env, target, kiwi); err == nil || !strings.Contains(err.Error(), "not a source file") {
+			t.Errorf("preview %s: %v, want a not-a-source-file error", target, err)
+		}
 	}
 }
