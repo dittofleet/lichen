@@ -201,15 +201,15 @@ func compile(file string, read func(string) ([]byte, error), names []string) (*c
 // spacing around the insert, which goes with it. The line above goes if
 // it can, else the one below.
 func (c *compiled) hideBlank(gap int) {
+	if len(c.out.lines) == 0 {
+		return
+	}
 	blank := func(i int) bool { return i < 0 || i >= len(c.out.lines) || strings.TrimSpace(c.out.lines[i]) == "" }
 	above, below := gap-1, gap
 	if !blank(above) || !blank(below) {
 		return
 	}
 	i := max(above, 0)
-	if i >= len(c.out.lines) {
-		return
-	}
 	hidden := c.lines[i]
 	if above >= 0 && below < len(c.out.lines) {
 		c.spacing[c.lines[below]] = append(c.spacing[c.lines[below]], append(c.spacing[hidden], hidden)...)
