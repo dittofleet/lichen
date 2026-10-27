@@ -2,10 +2,12 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"lichen/internal/config"
 	"lichen/internal/core"
+	"lichen/internal/events"
 	"lichen/internal/files"
 )
 
@@ -46,6 +48,8 @@ func cmdFiles(args []string) error {
 		return nil
 	case "list", "ls":
 		return cmdFilesList()
+	case "preview":
+		return cmdFilesPreview(args[1:])
 	}
 	return fmt.Errorf("unknown command %q (see: lichen help files)", args[0])
 }
@@ -99,6 +103,36 @@ func cmdFilesAdd(args []string) error {
 		return err
 	}
 	fmt.Printf("syncing %s on %s, from %s\n", tilde(p), core.Describe(scope), at)
+	return nil
+}
+
+func cmdFilesPreview(args []string) error {
+	if len(args) < 1 || len(args) > 2 {
+		return usage("files", "preview")
+	}
+	env, err := core.Load(clilog())
+	if err != nil {
+		return err
+	}
+	d := env.Device
+	if len(args) == 2 && args[1] != d.Name {
+		oses, err := events.OSes()
+		if err != nil {
+			return fmt.Errorf("previewing another device takes its OS, from crosstalk: %w", err)
+		}
+		if oses[args[1]] == "" {
+			return fmt.Errorf("%s has not told crosstalk its OS: is lichen running there? (see: lichen devices)", args[1])
+		}
+		d = env.Settings.Device(args[1], oses[args[1]])
+	}
+	content, off, err := files.Preview(env, args[0], d)
+	if err != nil {
+		return err
+	}
+	os.Stdout.Write(content)
+	if off {
+		fmt.Fprintln(os.Stderr, dim(fmt.Sprintf("(%s doesn't write this file)", d.Name)))
+	}
 	return nil
 }
 

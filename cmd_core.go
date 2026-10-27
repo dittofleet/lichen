@@ -43,6 +43,9 @@ func cmdSetup(args []string) error {
 // setup creates the sync folder, brings everything synced to this
 // device, and starts the daemon.
 func setup(url string) error {
+	if _, err := core.DeviceName(); err != nil {
+		return err
+	}
 	dir, err := core.Setup(url)
 	if err != nil {
 		return err
@@ -63,10 +66,6 @@ func setup(url string) error {
 		fmt.Println("This sync folder isn't synced anywhere yet: give it a remote with `git -C ~/lichen remote add origin <url>`.")
 	}
 	fmt.Println("Start syncing with `lichen files add <path> <source>`.")
-	if _, err := exec.LookPath("crosstalk"); err != nil {
-		fmt.Println("crosstalk is not installed: changes from other devices arrive hourly instead of")
-		fmt.Println("within seconds. https://github.com/dittofleet/crosstalk")
-	}
 	return nil
 }
 
@@ -75,12 +74,15 @@ func setup(url string) error {
 // LICHEN_REPO skips the question.
 func cmdPostinstall() error {
 	return postinstall.Run(app.New(), func() error {
-		if _, err := core.Load(clilog()); err == nil {
+		if _, err := core.Load(clilog()); !errors.Is(err, core.ErrNotSetUp) {
 			binary, err := clikit.Executable()
 			if err != nil {
 				return err
 			}
 			return service.Install(binary)
+		}
+		if _, err := core.DeviceName(); err != nil {
+			return err
 		}
 		url := os.Getenv("LICHEN_REPO")
 		if url == "" && term.IsTerminal(int(os.Stdin.Fd())) {
@@ -190,6 +192,11 @@ func cmdDevices() error {
 			}
 		}
 	}
+	oses, _ := events.OSes()
+	if oses == nil {
+		oses = map[string]string{}
+	}
+	oses[env.Device.Name] = core.OS()
 	width := 0
 	for _, d := range devices {
 		width = max(width, len(d.Name))
@@ -202,7 +209,11 @@ func cmdDevices() error {
 		case !d.Online && i < known:
 			note = " (away)"
 		}
-		fmt.Printf("%-*s  %s%s\n", width, d.Name, strings.Join(env.Settings.GroupsOf(d.Name), ", "), dim(note))
+		groups := env.Settings.GroupsOf(d.Name)
+		if group := oses[d.Name]; group != "" {
+			groups = env.Settings.Device(d.Name, group).Groups
+		}
+		fmt.Printf("%-*s  %s%s\n", width, d.Name, strings.Join(groups, ", "), dim(note))
 	}
 	return nil
 }

@@ -635,9 +635,14 @@ func track(env *core.Env, st *state, w want, content []byte) error {
 
 // build compiles a source file for this device.
 func build(env *core.Env, file string) (*compiled, error) {
+	return buildFor(env, file, env.Device)
+}
+
+// buildFor compiles file of the sync folder for d.
+func buildFor(env *core.Env, file string, d core.Device) (*compiled, error) {
 	return compile(file, func(name string) ([]byte, error) {
 		return os.ReadFile(sourcePath(env, name))
-	}, env.Device.Names())
+	}, d.Names())
 }
 
 // merge3 merges two edits of base, as git would. ok is false when they

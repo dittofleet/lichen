@@ -17,13 +17,16 @@ lichen is a pun on 'liken' and just how lichen behaves in general.
 
 ## Setup
 
-Prereqs on each device: git access that can clone the sync repo (SSH key
-or credentials, since the repo should be private), and
-[crosstalk](https://github.com/dittofleet/crosstalk) joined to your hub.
-lichen nudges your other devices through crosstalk after each push, so
-they pull within seconds, and names each device the way crosstalk does.
-Without it, and for pushes made outside lichen, devices catch up on an
-hourly pass.
+Each device needs:
+
+- git access that can clone the sync repo (SSH key or credentials, since
+  the repo should be private)
+- [crosstalk](https://github.com/dittofleet/crosstalk), installed and
+  joined to your hub
+
+lichen names each device the way crosstalk does, and nudges your other
+devices through it after each push, so they pull within seconds. Pushes
+made outside lichen arrive on an hourly pass.
 
 Create an empty private repo once (the sync repo, e.g. `you/lichen-sync`),
 then on every device:
@@ -81,8 +84,8 @@ Skills and MCP servers work the same way, and [inserts](#inserts) use
 `if` and `unless`. A device that falls out of scope keeps its files as
 plain files and uninstalls its skills and servers.
 
-`lichen devices` lists device names (crosstalk's). `mac` and `linux` are
-built-in groups. Custom groups are stored in `~/lichen/lichen.toml`:
+`lichen devices` lists device names (crosstalk's) and their groups. `mac`
+and `linux` are built-in groups. Custom groups are stored in `~/lichen/lichen.toml`:
 
 ```sh
 lichen groups add servers hetzner-1 hetzner-2
@@ -102,7 +105,9 @@ and editing either side syncs: the output (`~/.zshrc`) or the source
 (`~/lichen/files/shell/zshrc`). A directory syncs as a whole, including
 files added to it later.
 
-`lichen files` shows every source and where it goes.
+`lichen files` shows every source and where it goes, and `lichen files
+preview <source|path> [<device>]` prints a file as a device writes it,
+with its [inserts](#inserts) settled for that device.
 
 ### Several outputs
 

@@ -58,7 +58,11 @@ func Load(lg *log.Logger) (*Env, error) {
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
 		return nil, ErrNotSetUp
 	}
-	e := &Env{Dir: dir, Device: Device{Name: deviceName()}, Log: lg}
+	name, err := DeviceName()
+	if err != nil {
+		return nil, err
+	}
+	e := &Env{Dir: dir, Device: Device{Name: name}, Log: lg}
 	return e, e.Reload()
 }
 
@@ -69,7 +73,7 @@ func (e *Env) Reload() error {
 		return err
 	}
 	e.Settings = s
-	e.Device.Groups = append([]string{osGroup()}, s.GroupsOf(e.Device.Name)...)
+	e.Device = s.Device(e.Device.Name, OS())
 	return nil
 }
 
@@ -171,52 +175,44 @@ func (d Device) named(names []string) bool {
 	return slices.ContainsFunc(names, func(n string) bool { return n == d.Name || slices.Contains(d.Groups, n) })
 }
 
-func osGroup() string {
+// Device is the device named name, on the OS group osGroup ("mac" or
+// "linux"), in the groups s puts it in.
+func (s Settings) Device(name, osGroup string) Device {
+	return Device{Name: name, Groups: append([]string{osGroup}, s.GroupsOf(name)...)}
+}
+
+// OS is this device's OS group: "mac" or "linux".
+func OS() string {
 	if runtime.GOOS == "darwin" {
 		return "mac"
 	}
 	return runtime.GOOS
 }
 
-// deviceName is the name crosstalk knows this machine by, so a device is
+// DeviceName is the name crosstalk knows this machine by, so a device is
 // called the same thing everywhere. It is remembered for when crosstalk
-// is not running, and before crosstalk ever answered it is the hostname,
-// the way crosstalk derives a name from it.
-func deviceName() string {
-	cache := ""
-	if d, err := config.DataDir(); err == nil {
-		cache = filepath.Join(d, "device")
+// can't say, as while offline.
+func DeviceName() (string, error) {
+	d, err := config.DataDir()
+	if err != nil {
+		return "", err
 	}
-	if name, err := events.Self(); err == nil && name != "" {
-		if cache != "" {
-			if old, _ := os.ReadFile(cache); strings.TrimSpace(string(old)) != name {
-				os.MkdirAll(filepath.Dir(cache), 0o755)
-				os.WriteFile(cache, []byte(name+"\n"), 0o644)
-			}
+	cache := filepath.Join(d, "device")
+	name, err := events.Self()
+	if err == nil {
+		if old, _ := os.ReadFile(cache); strings.TrimSpace(string(old)) != name {
+			os.MkdirAll(d, 0o755)
+			os.WriteFile(cache, []byte(name+"\n"), 0o644)
 		}
-		return name
+		return name, nil
 	}
-	if cache != "" {
-		if b, err := os.ReadFile(cache); err == nil && strings.TrimSpace(string(b)) != "" {
-			return strings.TrimSpace(string(b))
-		}
+	if b, _ := os.ReadFile(cache); strings.TrimSpace(string(b)) != "" {
+		return strings.TrimSpace(string(b)), nil
 	}
-	host, _ := os.Hostname()
-	return nameFrom(host)
-}
-
-var notNameChar = regexp.MustCompile(`[^a-z0-9]+`)
-
-func nameFrom(host string) string {
-	host, _, _ = strings.Cut(strings.ToLower(host), ".")
-	name := strings.Trim(notNameChar.ReplaceAllString(host, "-"), "-")
-	if len(name) > 32 {
-		name = strings.Trim(name[:32], "-")
+	if errors.Is(err, events.ErrNotRunning) {
+		return "", errors.New("crosstalk is required, installed and joined to your hub: https://github.com/dittofleet/crosstalk")
 	}
-	if name == "" {
-		return "device"
-	}
-	return name
+	return "", fmt.Errorf("lichen names this device the way crosstalk does, and crosstalk can't say yet: %w", err)
 }
 
 // Describe names a scope for people: "every device", the devices and

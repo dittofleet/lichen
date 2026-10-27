@@ -947,3 +947,45 @@ func TestOfflineEditsDoNotWedge(t *testing.T) {
 	a.sync()
 	expect(t, a, ".zshrc", "later\n")
 }
+
+// A file previews as another device would write it, by source name, by
+// output path, or as a piece.
+func TestPreview(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write(".zshrc", "top\n")
+	a.add(".zshrc")
+	a.write(".vimrc", "set nu\n")
+	a.add(".vimrc", "apple")
+	a.write(".claude/commands/one.md", "1\n")
+	a.add(".claude/commands")
+	a.write("lichen/files/pieces/linux", "on linux\n")
+	a.write("lichen/files/zshrc", "top\n§ pieces/linux if linux\n")
+	a.sync()
+	env := a.env()
+	kiwi := core.Device{Name: "kiwi", Groups: []string{"linux"}}
+	for _, tc := range []struct {
+		target string
+		d      core.Device
+		want   string
+		off    bool
+	}{
+		{"zshrc", kiwi, "top\non linux\n", false},
+		{"~/.zshrc", kiwi, "top\non linux\n", false},
+		{"zshrc", core.Device{Name: "apple", Groups: []string{"mac"}}, "top\n", false},
+		{"pieces/linux", kiwi, "on linux\n", false},
+		{"vimrc", kiwi, "set nu\n", true},
+		{"claude/commands/one.md", kiwi, "1\n", false},
+		{"~/.claude/commands/one.md", kiwi, "1\n", false},
+	} {
+		got, off, err := files.Preview(env, tc.target, tc.d)
+		if err != nil || string(got) != tc.want || off != tc.off {
+			t.Errorf("preview %s on %s = %q, %v, %v; want %q, %v", tc.target, tc.d.Name, got, off, err, tc.want, tc.off)
+		}
+	}
+	for _, target := range []string{"nope", "~/.claude/commands", "~/.claude/commands/new.md", "../.zshrc"} {
+		if _, _, err := files.Preview(env, target, kiwi); err == nil || !strings.Contains(err.Error(), "not a source file") {
+			t.Errorf("preview %s: %v, want a not-a-source-file error", target, err)
+		}
+	}
+}

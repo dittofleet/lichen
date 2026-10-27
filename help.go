@@ -42,6 +42,8 @@ var help = []helpSection{
 				"Edits on either side sync. Sources can insert others with § lines (see the README).",
 			subs: []helpSub{
 				{"list", "files [list]", "List sources and their outputs", ""},
+				{"preview", "files preview <source|path> [<device>]", "Show a file as a device writes it",
+					"This device when none is named."},
 				{"add", "files add <path> <source> [--include|--exclude <devices,groups>]", "Sync a file or directory",
 					"The source is its name in ~/lichen/files, like shell/zshrc."},
 				{"add", "files add <path> --to <source> [--include|--exclude <devices,groups>]", "Add an output to a source", ""},
