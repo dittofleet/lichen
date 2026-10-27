@@ -243,7 +243,7 @@ func (e *Env) Push() error {
 			return nil
 		}
 	}
-	if err := events.Announce(); err != nil && !errors.Is(err, events.ErrNotRunning) {
+	if err := events.Announce(); err != nil {
 		e.Log.Printf("other devices not nudged, they catch up on their next pass: %v", err)
 	}
 	return nil

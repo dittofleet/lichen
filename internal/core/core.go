@@ -175,10 +175,10 @@ func (d Device) named(names []string) bool {
 	return slices.ContainsFunc(names, func(n string) bool { return n == d.Name || slices.Contains(d.Groups, n) })
 }
 
-// Device is the device named name, running os ("mac" or "linux"), in
-// the groups s puts it in.
-func (s Settings) Device(name, os string) Device {
-	return Device{Name: name, Groups: append([]string{os}, s.GroupsOf(name)...)}
+// Device is the device named name, on the OS group osGroup ("mac" or
+// "linux"), in the groups s puts it in.
+func (s Settings) Device(name, osGroup string) Device {
+	return Device{Name: name, Groups: append([]string{osGroup}, s.GroupsOf(name)...)}
 }
 
 // OS is this device's OS group: "mac" or "linux".
@@ -198,18 +198,19 @@ func DeviceName() (string, error) {
 		return "", err
 	}
 	cache := filepath.Join(d, "device")
-	if name, err := events.Self(); err == nil && name != "" {
+	name, err := events.Self()
+	if err == nil {
 		if old, _ := os.ReadFile(cache); strings.TrimSpace(string(old)) != name {
 			os.MkdirAll(d, 0o755)
 			os.WriteFile(cache, []byte(name+"\n"), 0o644)
 		}
 		return name, nil
-	} else if b, _ := os.ReadFile(cache); strings.TrimSpace(string(b)) != "" {
+	}
+	if b, _ := os.ReadFile(cache); strings.TrimSpace(string(b)) != "" {
 		return strings.TrimSpace(string(b)), nil
-	} else if errors.Is(err, events.ErrNotRunning) {
+	}
+	if errors.Is(err, events.ErrNotRunning) {
 		return "", errors.New("crosstalk is required, installed and joined to your hub: https://github.com/dittofleet/crosstalk")
-	} else if err == nil {
-		err = errors.New("it named no device")
 	}
 	return "", fmt.Errorf("lichen names this device the way crosstalk does, and crosstalk can't say yet: %w", err)
 }

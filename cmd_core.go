@@ -193,6 +193,10 @@ func cmdDevices() error {
 		}
 	}
 	oses, _ := events.OSes()
+	if oses == nil {
+		oses = map[string]string{}
+	}
+	oses[env.Device.Name] = core.OS()
 	width := 0
 	for _, d := range devices {
 		width = max(width, len(d.Name))
@@ -206,10 +210,8 @@ func cmdDevices() error {
 			note = " (away)"
 		}
 		groups := env.Settings.GroupsOf(d.Name)
-		if d.Self {
-			groups = env.Device.Groups
-		} else if os := oses[d.Name]; os != "" {
-			groups = append([]string{os}, groups...)
+		if group := oses[d.Name]; group != "" {
+			groups = env.Settings.Device(d.Name, group).Groups
 		}
 		fmt.Printf("%-*s  %s%s\n", width, d.Name, strings.Join(groups, ", "), dim(note))
 	}

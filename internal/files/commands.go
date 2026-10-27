@@ -523,9 +523,7 @@ func Preview(env *core.Env, target string, d core.Device) (content []byte, off b
 		rel, _ := filepath.Rel(root, abs)
 		file = path.Join(n, filepath.ToSlash(rel))
 	}
-	comp, err := compile(file, func(name string) ([]byte, error) {
-		return os.ReadFile(sourcePath(env, name))
-	}, d.Names())
+	comp, err := buildFor(env, file, d)
 	if err != nil {
 		return nil, false, err
 	}
