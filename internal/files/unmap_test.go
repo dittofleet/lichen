@@ -187,6 +187,7 @@ func TestUnmapBesideHiddenBlanks(t *testing.T) {
 		{mid, "a\nx\n\nb\n", "a\nx\n\n§ l if linux\n\nb\n"},
 		{"a\n\n§ l if linux\n\n§ l if linux\n\nb\n", "a\nb\n", "a\n§ l if linux\n§ l if linux\nb\n"},
 		{"\n§ l if linux\n§ l if linux\n\n\n", "q\n", "§ l if linux\n§ l if linux\nq\n"},
+		{"a\n\n§ l if linux\n§ l if linux\n", "a\nb\n", "a\nb\n\n§ l if linux\n§ l if linux\n"},
 	} {
 		srcs := map[string]string{"zshrc": tc.src, "l": "l\n"}
 		got, open, err := unmapped(t, srcs, tc.live, "")

@@ -106,6 +106,10 @@ func TestCompileHidesBlanksOfInsertsNotHere(t *testing.T) {
 		"at the end":              {"a\n\n§ x if linux\n", "a\n"},
 		"between paragraphs":      {"a\n\n§ x if linux\n\nb\n", "a\n\nb\n"},
 		"two in a row":            {"a\n\n§ x if linux\n§ x if linux\n\nb\n", "a\n\nb\n"},
+		"two at the start":        {"§ x if linux\n§ x if linux\n\na\n", "a\n"},
+		"two at the end":          {"a\n\n§ x if linux\n§ x if linux\n", "a\n"},
+		"two, then one":           {"a\n\n§ x if linux\n§ x if linux\n\n§ x if linux\n", "a\n"},
+		"two across files":        {"a\n\n§ z\n§ x if linux\n", "a\n"},
 		"each between paragraphs": {"a\n\n§ x if linux\n\n§ x if linux\n", "a\n"},
 		"only spacing above":      {"a\n\n§ x if linux\nb\n", "a\n\nb\n"},
 		"no spacing":              {"a\n§ x if linux\nb\n", "a\nb\n"},
@@ -113,7 +117,7 @@ func TestCompileHidesBlanksOfInsertsNotHere(t *testing.T) {
 		"inside an insert":        {"a\n\n§ y\n\nb\n", "a\n\ny\n\nb\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			srcs := map[string]string{"a": tc.src, "x": "x\n", "y": "y\n§ x if linux\n"}
+			srcs := map[string]string{"a": tc.src, "x": "x\n", "y": "y\n§ x if linux\n", "z": "§ x if linux\n"}
 			c, err := compile("a", reader(srcs), []string{"mac"})
 			if err != nil {
 				t.Fatal(err)
