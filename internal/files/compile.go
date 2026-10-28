@@ -190,7 +190,8 @@ func compile(file string, read func(string) ([]byte, error), names []string) (*c
 	if err := walk(file, nil); err != nil {
 		return nil, err
 	}
-	for _, g := range slices.Backward(skipped) {
+	// Inserts not here side by side share a gap, and hide one blank.
+	for _, g := range slices.Backward(slices.Compact(skipped)) {
 		c.hideBlank(g)
 	}
 	return c, nil
