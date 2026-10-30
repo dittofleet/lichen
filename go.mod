@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	github.com/BurntSushi/toml v1.6.0
-	github.com/dittofleet/go-cli-kit v0.5.0
+	github.com/dittofleet/go-cli-kit v0.6.0
 	github.com/fsnotify/fsnotify v1.10.1
 	golang.org/x/term v0.43.0
 )
