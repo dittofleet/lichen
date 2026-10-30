@@ -1,7 +1,7 @@
 github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk=
 github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
-github.com/dittofleet/go-cli-kit v0.4.0 h1:9u+aA8DuLEvtvXj7Tce56V4zjjFv0yavkmqAFqLgoAA=
-github.com/dittofleet/go-cli-kit v0.4.0/go.mod h1:68jAp6SWsr0BaEcIIgftWDxwLxUwMMKdZsHoPldjmqM=
+github.com/dittofleet/go-cli-kit v0.5.0 h1:VLQSzhkVbfXNgfPT7MXx1S3TUDWhoyhtWUHFFDEdagc=
+github.com/dittofleet/go-cli-kit v0.5.0/go.mod h1:68jAp6SWsr0BaEcIIgftWDxwLxUwMMKdZsHoPldjmqM=
 github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=
 github.com/fsnotify/fsnotify v1.10.1/go.mod h1:TLheqan6HD6GBK6PrDWyDPBaEV8LspOxvPSjC+bVfgo=
 golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=

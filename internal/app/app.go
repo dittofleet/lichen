@@ -10,5 +10,5 @@ import (
 // New describes this build to go-cli-kit, which finds its releases under
 // dittofleet/lichen.
 func New() clikit.App {
-	return clikit.App{Name: "lichen", Version: version.Current}
+	return clikit.App{Owner: "dittofleet", Name: "lichen", Version: version.Current}
 }
