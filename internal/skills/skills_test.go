@@ -187,6 +187,7 @@ func TestDiscoverRootSkill(t *testing.T) {
 func TestRun(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("LICHEN_DIR", "")
 	t.Setenv("XDG_DATA_HOME", "")
 	upstream := t.TempDir()

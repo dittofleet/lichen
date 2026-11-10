@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"lichen/internal/config"
@@ -34,20 +33,17 @@ func Acquire(ctx context.Context, notify func()) (release func(), err error) {
 	if err != nil {
 		return nil, err
 	}
-	// Poll a non-blocking flock so ctx stays honored: a plain blocking
-	// LOCK_EX cannot be cancelled. The lock is advisory but exclusive
-	// across processes regardless.
+	// Poll a lock that does not wait so ctx stays honored: one that waits
+	// cannot be cancelled.
 	deadline := time.Now().Add(500 * time.Millisecond)
 	notified := false
 	for {
-		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		err := tryLock(f)
 		if err == nil {
-			return func() {
-				syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-				f.Close()
-			}, nil
+			// Closing the file lets go of the lock.
+			return func() { f.Close() }, nil
 		}
-		if err != syscall.EWOULDBLOCK {
+		if err != errLocked {
 			f.Close()
 			return nil, fmt.Errorf("lock: %w", err)
 		}

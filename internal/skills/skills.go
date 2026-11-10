@@ -542,7 +542,7 @@ func realpath(p string) string {
 	return p
 }
 
-// linksTo reports whether the symlink at link points at canonical,
+// linksTo reports whether the link at link points at canonical,
 // resolving a relative destination against the link's real directory.
 // The Vercel skills CLI writes relative links
 // (../../.agents/skills/<name>), so an equivalent link from either tool
@@ -560,14 +560,13 @@ func linksTo(link, canonical string) bool {
 }
 
 // ensureLink points <dir>/<name> at the canonical copy so that harness
-// picks the skill up. The link is relative, exactly what the Vercel
-// skills CLI would create. Anything already at that path that does not
-// resolve to the canonical copy belongs to another installer and is left
-// alone. Reports whether the link is in place (and thus ours to manage).
+// picks the skill up. Anything already at that path that does not resolve
+// to the canonical copy belongs to another installer and is left alone.
+// Reports whether the link is in place (and thus ours to manage).
 func ensureLink(name, canonical, dir string, lg *log.Logger) bool {
 	link := filepath.Join(dir, name)
-	if fi, err := os.Lstat(link); err == nil {
-		if fi.Mode()&os.ModeSymlink != 0 && linksTo(link, canonical) {
+	if _, err := os.Lstat(link); err == nil {
+		if linksTo(link, canonical) {
 			return true
 		}
 		lg.Printf("skills: NOT linking %s into %s (something else is already there)", name, config.ContractHome(dir))
@@ -577,18 +576,14 @@ func ensureLink(name, canonical, dir string, lg *log.Logger) bool {
 		lg.Printf("skills: %v", err)
 		return false
 	}
-	rel, err := filepath.Rel(realpath(dir), realpath(canonical))
-	if err != nil {
-		rel = canonical
-	}
-	if err := os.Symlink(rel, link); err != nil {
+	if err := makeLink(canonical, link); err != nil {
 		lg.Printf("skills: %v", err)
 		return false
 	}
 	return true
 }
 
-// syncLinks makes a skill's harness symlinks match the configured dirs:
+// syncLinks makes a skill's harness links match the configured dirs:
 // links we maintained in a dir no longer configured are removed (only
 // when they still resolve to our canonical copy), missing ones are
 // created. Returns the links now under lichen's management.

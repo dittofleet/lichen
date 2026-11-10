@@ -67,10 +67,9 @@ func (p *pass) reconcile() error {
 		// A capture can delete a source or add files to one.
 		ws, dirs = wants(p.env, p.cfg, nil)
 	}
-	if err := p.apply(ws); err != nil {
-		return err
-	}
-	return p.release(ws, dirs)
+	// An output that can't be written or deleted (a program has it open,
+	// say) fails on its own, and the rest goes ahead.
+	return errors.Join(p.apply(ws), p.release(ws, dirs))
 }
 
 func newPass(env *core.Env) (*pass, error) {
@@ -163,7 +162,7 @@ func (p *pass) buryMissing() error {
 func (p *pass) captureNew(ws map[string]want, dirs map[string]string) error {
 	for _, root := range slices.Sorted(maps.Keys(dirs)) {
 		source := dirs[root]
-		if fi, err := os.Lstat(root); err != nil || !fi.IsDir() || underSymlink(p.home, root) {
+		if fi, err := os.Lstat(root); err != nil || !fi.IsDir() || underLink(p.home, root) {
 			continue
 		}
 		for _, rel := range listFiles(root) {
@@ -201,8 +200,8 @@ func (p *pass) capture(ws map[string]want) error {
 	for _, out := range slices.Sorted(maps.Keys(ws)) {
 		w := ws[out]
 		rec := p.st.Outputs[out]
-		// Behind a symlink, a missing file says nothing about deletion.
-		if rec == nil || underSymlink(p.home, out) {
+		// Behind a link, a missing file says nothing about deletion.
+		if rec == nil || underLink(p.home, out) {
 			continue
 		}
 		fi, err := os.Lstat(out)
@@ -245,7 +244,10 @@ func (p *pass) captureEdit(w want, rec *record, live []byte) error {
 		p.hold(w.path, rec, "which source do the new lines go in?")
 		return nil
 	}
-	if err := take(p.env, p.st, w, sources, live); err != nil {
+	switch err := take(p.env, p.st, w, sources, live); {
+	case errors.Is(err, errEditedAgain):
+		return nil // the next pass takes it whole
+	case err != nil:
 		return err
 	}
 	if len(sources) > 0 {
@@ -295,10 +297,11 @@ func (p *pass) captureDeletion(w want) error {
 // edit made here that waits on `lichen resolve`.
 func (p *pass) apply(ws map[string]want) error {
 	written := 0
+	var failed []error
 	for _, out := range slices.Sorted(maps.Keys(ws)) {
 		w := ws[out]
-		if underSymlink(p.home, out) {
-			p.env.Log.Printf("files: NOT syncing %s (a symlink sits above it)", config.ContractHome(out))
+		if underLink(p.home, out) {
+			p.env.Log.Printf("files: NOT syncing %s (a link sits above it)", config.ContractHome(out))
 			continue
 		}
 		c, err := build(p.env, w.file)
@@ -325,7 +328,8 @@ func (p *pass) apply(ws map[string]want) error {
 			// that exist nowhere else.
 			to, err := backup.Discard(out, true)
 			if err != nil {
-				return fmt.Errorf("replacing %s: %w", out, err)
+				failed = append(failed, fmt.Errorf("replacing %s: %w", out, err))
+				continue
 			}
 			p.env.Log.Printf("files: moved %s out of the way to %s", config.ContractHome(out), to)
 		default:
@@ -344,7 +348,8 @@ func (p *pass) apply(ws map[string]want) error {
 				// synced version replaces it.
 				to, err := backup.Discard(out, p.env.Settings.Backups)
 				if err != nil {
-					return fmt.Errorf("replacing %s: %w", out, err)
+					failed = append(failed, fmt.Errorf("replacing %s: %w", out, err))
+					continue
 				}
 				p.env.Log.Printf("files: replacing local %s with the synced version%s", config.ContractHome(out), keptAt(to))
 			case hashOf(live) != rec.Hash:
@@ -352,7 +357,8 @@ func (p *pass) apply(ws map[string]want) error {
 			}
 		}
 		if err := writeFile(out, c.content(), isExec(sourcePath(p.env, w.file)), p.cfg.Sources[w.source].Private); err != nil {
-			return err
+			failed = append(failed, err)
+			continue
 		}
 		if err := p.st.remember(w, c); err != nil {
 			return err
@@ -362,7 +368,7 @@ func (p *pass) apply(ws map[string]want) error {
 	if written > 0 {
 		p.env.Log.Printf("files: wrote %d output(s)", written)
 	}
-	return nil
+	return errors.Join(failed...)
 }
 
 // syncModes carries a change of the executable bit, whichever side made
@@ -372,7 +378,7 @@ func (p *pass) syncModes(ws map[string]want) error {
 	for _, out := range slices.Sorted(maps.Keys(ws)) {
 		w, rec := ws[out], p.st.Outputs[out]
 		src := sourcePath(p.env, w.file)
-		if rec == nil || !regular(out) || !regular(src) || underSymlink(p.home, out) {
+		if rec == nil || !regular(out) || !regular(src) || underLink(p.home, out) {
 			continue
 		}
 		here := isExec(out)
@@ -419,7 +425,7 @@ func (p *pass) release(ws map[string]want, dirs map[string]string) error {
 	revived := map[string]bool{}
 	for _, out := range released {
 		rec := p.st.Outputs[out]
-		if !deleted(out, rec) || !regular(out) || underSymlink(p.home, out) {
+		if !deleted(out, rec) || !regular(out) || underLink(p.home, out) {
 			continue
 		}
 		live, err := os.ReadFile(out)
@@ -469,6 +475,7 @@ func (p *pass) release(ws map[string]want, dirs map[string]string) error {
 		}
 	}
 
+	var failed []error
 	for _, out := range released {
 		rec := p.st.Outputs[out]
 		if revived[rec.Source] {
@@ -482,16 +489,25 @@ func (p *pass) release(ws map[string]want, dirs map[string]string) error {
 			p.env.Log.Printf("files: %s no longer syncs here, left as a plain file", config.ContractHome(out))
 			continue
 		}
-		if underSymlink(p.home, out) {
-			p.env.Log.Printf("files: NOT deleting %s (a symlink sits above it), no longer synced", config.ContractHome(out))
+		if underLink(p.home, out) {
+			p.env.Log.Printf("files: NOT deleting %s (a link sits above it), no longer synced", config.ContractHome(out))
 			continue
 		}
-		if live, err := os.ReadFile(out); err != nil || hashOf(live) != rec.Hash {
+		live, err := os.ReadFile(out)
+		if err == nil && hashOf(live) != rec.Hash {
 			continue
 		}
-		to, err := backup.Discard(out, p.env.Settings.Backups)
+		var to string
+		if err == nil {
+			to, err = backup.Discard(out, p.env.Settings.Backups)
+		}
 		if err != nil {
-			return err
+			// Still there (a program has it open, say), so still lichen's to
+			// delete on a later pass. Forgotten, it would look like a new
+			// file, and come back everywhere.
+			p.st.Outputs[out] = rec
+			failed = append(failed, err)
+			continue
 		}
 		p.env.Log.Printf("files: deleted %s (deleted on another device)%s", config.ContractHome(out), keptAt(to))
 		if rec.Root != out {
@@ -502,7 +518,7 @@ func (p *pass) release(ws map[string]want, dirs map[string]string) error {
 			removeEmptyParents(filepath.Dir(out), stop)
 		}
 	}
-	return nil
+	return errors.Join(failed...)
 }
 
 // private reports whether no one but the owner may read path.
@@ -599,10 +615,18 @@ func place(env *core.Env, rec *record, live []byte, into []string, ours bool) (m
 	return sources, nil, nil
 }
 
+// errEditedAgain says an output was edited between being read and being
+// written, which working out where its lines go leaves time for. Nothing
+// is taken of it then, and the newer edit is not written over.
+var errEditedAgain = errors.New("it was edited again just now")
+
 // take writes the sources an edit made here changed, then the output
 // compiled from them, unless it holds that already (live), and remembers
 // it.
 func take(env *core.Env, st *state, w want, sources map[string][]byte, live []byte) error {
+	if now, err := os.ReadFile(w.path); err != nil || !bytes.Equal(now, live) {
+		return errEditedAgain
+	}
 	for _, f := range slices.Sorted(maps.Keys(sources)) {
 		path := sourcePath(env, f)
 		if err := writeFile(path, sources[f], isExec(path), false); err != nil {
@@ -722,12 +746,13 @@ func isExec(path string) bool {
 	return err == nil && fi.Mode().Perm()&0o100 != 0
 }
 
-// underSymlink reports whether any directory between home (exclusive)
-// and abs is a symlink: syncing through one would read or write whatever
-// the link points at.
-func underSymlink(home, abs string) bool {
+// underLink reports whether anything between home (exclusive) and abs is
+// not a directory of its own but a link to one: a symlink, or on Windows
+// a junction. Syncing through one would read or write whatever the link
+// points at, and take its files for deleted when that is not there.
+func underLink(home, abs string) bool {
 	for d := filepath.Dir(abs); len(d) > len(home); d = filepath.Dir(d) {
-		if fi, err := os.Lstat(d); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		if fi, err := os.Lstat(d); err == nil && !fi.IsDir() {
 			return true
 		}
 	}

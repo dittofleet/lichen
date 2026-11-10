@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"lichen/internal/config"
 	"lichen/internal/events"
@@ -79,13 +80,102 @@ func (e *Env) pull() error {
 	if up, err := e.hasUpstream(); err != nil || !up {
 		return err
 	}
-	_, err := e.Git("pull", "--rebase", "-X", "theirs", "--quiet")
+	// Fetched first, to look at what is coming before any of it is checked
+	// out.
+	if _, err := e.Git("fetch", "--quiet", "origin"); err != nil {
+		return err
+	}
+	if _, err := e.Git("merge-base", "--is-ancestor", "@{u}", "HEAD"); err == nil {
+		return nil // nothing is coming
+	}
+	if err := sameByCase(e.Dir, "@{u}"); err != nil {
+		return err
+	}
+	_, err := e.committing("rebase", "-X", "theirs", "--quiet")
 	if err != nil && e.rebasing() {
 		err = e.settleRebase()
 	}
 	if err != nil {
 		e.abortStaleRebase()
+		e.putBack()
+		stuck = e.ends()
 		return err
+	}
+	stuck = ""
+	return nil
+}
+
+// stuck is where a pull last failed: this device's commit and the one
+// coming. Push does not pull again between the same two. That pull would
+// fail the same way, and what it writes and puts back in the sync folder
+// has the daemon start another pass, which would do it all again.
+var stuck string
+
+// ends names the commits a pull is between.
+func (e *Env) ends() string {
+	out, _ := e.Git("rev-parse", "HEAD", "@{u}")
+	return out
+}
+
+// putBack undoes what git checked out of the incoming commit before it
+// stopped at a file it could not replace, one a program holds open on
+// Windows. Left there, those files would pass for edits made on this
+// device, and undo the commits waiting to be sent. Only files that are
+// now as the incoming commit has them go back: any other is an edit.
+func (e *Env) putBack() {
+	names := func(args ...string) ([]string, error) {
+		out, err := e.Git(append([]string{"diff", "--name-only", "-z", "--no-renames"}, args...)...)
+		return split0(out), err
+	}
+	here, err := names("HEAD")
+	if err != nil {
+		return
+	}
+	coming, err := names("@{u}")
+	if err != nil {
+		return
+	}
+	// Nor is a file the incoming commit adds an addition made here.
+	added, err := names("--diff-filter=A", "HEAD", "@{u}")
+	if err != nil {
+		return
+	}
+	back := slices.DeleteFunc(here, func(p string) bool { return slices.Contains(coming, p) })
+	// In parts, for a command line has a longest length.
+	for part := range slices.Chunk(back, 50) {
+		if _, err := e.Git(append([]string{"--literal-pathspecs", "checkout", "--quiet", "HEAD", "--"}, part...)...); err != nil {
+			e.Log.Printf("pull: %v", err)
+		}
+	}
+	// git removes them, as it knows which are in no commit here: to the
+	// file system, a name can be that of another file (Foo and foo).
+	for part := range slices.Chunk(added, 50) {
+		if _, err := e.Git(append([]string{"--literal-pathspecs", "clean", "--quiet", "-f", "-x", "--"}, part...)...); err != nil {
+			e.Log.Printf("pull: %v", err)
+		}
+	}
+}
+
+// sameByCase refuses a commit in which two files have names that differ
+// only by case, on a device whose file system takes those for one name
+// (Windows, and macOS as it comes). Checked out there, one would
+// overwrite the other, and the next commit would take that to every
+// device.
+func sameByCase(dir, commit string) error {
+	if _, err := os.Stat(filepath.Join(dir, ".GIT")); err != nil {
+		return nil // they are two names here
+	}
+	out, err := gitutil.Run(dir, "ls-tree", "-r", "-z", "--name-only", commit)
+	if err != nil {
+		return err
+	}
+	seen := map[string]string{}
+	for _, p := range split0(out) {
+		folded := strings.ToLower(p)
+		if other, ok := seen[folded]; ok {
+			return fmt.Errorf("%s and %s differ only by case, and this device can only hold one of them: rename one on a device that has both", other, p)
+		}
+		seen[folded] = p
 	}
 	return nil
 }
@@ -118,9 +208,9 @@ func (e *Env) settleRebase() error {
 		}
 		if _, staged := e.Git("diff", "--cached", "--quiet"); staged == nil {
 			// Nothing is left of the local commit.
-			_, err = e.Git("rebase", "--skip")
+			_, err = e.committing("rebase", "--skip")
 		} else {
-			_, err = e.Git("-c", "core.editor=true", "rebase", "--continue")
+			_, err = e.committing("-c", "core.editor=true", "rebase", "--continue")
 		}
 		// Stopping on the next commit's conflict is for the next round.
 		if err != nil && e.rebasing() {
@@ -172,13 +262,18 @@ func (e *Env) Commit(subject, body string) error {
 	if body != "" {
 		args = append(args, "-m", body)
 	}
-	// A server may have no git identity of its own: commits there are
-	// lichen's anyway.
+	_, err := e.committing(args...)
+	return err
+}
+
+// committing runs a git command that makes commits, which need someone
+// to be by. A machine may have no git identity of its own (a server,
+// say): commits there are lichen's anyway.
+func (e *Env) committing(args ...string) (string, error) {
 	if email, _ := e.Git("config", "user.email"); email == "" {
 		args = append([]string{"-c", "user.name=lichen", "-c", "user.email=lichen@" + e.Device.Name}, args...)
 	}
-	_, err := e.Git(args...)
-	return err
+	return e.Git(args...)
 }
 
 // Changes stages every edit made in the sync folder since the last
@@ -191,10 +286,38 @@ func (e *Env) Changes() ([]string, error) {
 	return split0(out), err
 }
 
+// staleAfter is how old a lock in the sync folder's .git has to be to
+// count as left behind. No git command of lichen's runs for that long.
+const staleAfter = 10 * time.Minute
+
+// clearStaleLocks removes the locks a git process left behind when it
+// was killed in the middle of writing (a power cut, say): on the index,
+// on HEAD, on a branch. Until they go, git refuses every commit and pull
+// there.
+func (e *Env) clearStaleLocks() {
+	filepath.WalkDir(e.Path(".git"), func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() && d.Name() == "objects" {
+			return filepath.SkipDir
+		}
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".lock") {
+			return nil
+		}
+		if fi, err := d.Info(); err == nil && time.Since(fi.ModTime()) > staleAfter {
+			e.Log.Printf("removing a lock a killed git left in the sync folder (%s)", d.Name())
+			os.Remove(path)
+		}
+		return nil
+	})
+}
+
 // stage stages everything in the sync folder but what lichen never syncs
 // (config.Ignored). A synced directory may bring a .gitignore of its
 // own, and what it ignores syncs all the same.
 func (e *Env) stage() error {
+	e.clearStaleLocks()
 	if _, err := e.Git("add", "-A"); err != nil {
 		return err
 	}
@@ -229,10 +352,13 @@ func (e *Env) Push() error {
 		}
 	}
 	if _, err := e.Git("push", "--quiet", "-u", "origin", "HEAD"); err != nil {
-		// That pull may deliver a version bump.
-		pulled, uerr := e.Update()
-		if uerr != nil {
-			return uerr
+		pulled := false
+		if stuck == "" || stuck != e.ends() {
+			// That pull may deliver a version bump.
+			var uerr error
+			if pulled, uerr = e.Update(); uerr != nil {
+				return uerr
+			}
 		}
 		if !pulled {
 			e.Log.Printf("push failed (will retry on the next pass): %v", err)
@@ -274,7 +400,18 @@ func Setup(url string) (string, error) {
 			return dir, err
 		}
 	} else if _, err := gitutil.Run(filepath.Dir(dir), "clone", "--quiet", url, dir); err != nil {
+		// git leaves the folder behind when it cloned but could not check
+		// the files out, as with a name Windows does not allow. To the
+		// next pass that would be a sync folder with every file deleted.
+		if _, cloned := os.Stat(filepath.Join(dir, ".git")); cloned == nil {
+			os.RemoveAll(dir)
+		}
 		return dir, err
+	} else if _, err := gitutil.Run(dir, "rev-parse", "--verify", "--quiet", "HEAD"); err == nil {
+		if err := sameByCase(dir, "HEAD"); err != nil {
+			os.RemoveAll(dir)
+			return dir, err
+		}
 	}
 	if err := onBranch(dir); err != nil {
 		os.RemoveAll(dir)

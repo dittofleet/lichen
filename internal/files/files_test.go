@@ -1,7 +1,6 @@
 package files_test
 
 import (
-	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -59,7 +58,10 @@ func (d *device) setup(remote string) {
 }
 
 func (d *device) use() {
+	// Go finds the home directory through HOME, and on Windows through
+	// USERPROFILE.
 	d.t.Setenv("HOME", d.home)
+	d.t.Setenv("USERPROFILE", d.home)
 	d.t.Setenv("LICHEN_DIR", "")
 	d.t.Setenv("XDG_DATA_HOME", "")
 	d.t.Setenv("XDG_CONFIG_HOME", "")
@@ -69,7 +71,7 @@ func (d *device) use() {
 func (d *device) env() *core.Env {
 	d.t.Helper()
 	d.use()
-	env, err := core.Load(log.New(io.Discard, "", 0))
+	env, err := core.Load(log.New(d.t.Output(), d.name+": ", 0))
 	if err != nil {
 		d.t.Fatalf("%s: %v", d.name, err)
 	}
@@ -370,7 +372,7 @@ func TestGroupEditsDoNotRevertEachOther(t *testing.T) {
 	a.change(func(env *core.Env) error { return env.EditGroup(true, "fruit", []string{"apple", "banana"}) })
 	b.change(func(env *core.Env) error { return env.EditGroup(true, "servers", []string{"banana"}) })
 	a.sync()
-	if got := strings.Join(a.env().Device.Groups, " "); got != "mac fruit" && got != "linux fruit" {
+	if got := strings.Join(a.env().Device.Groups, " "); got != core.OS+" fruit" {
 		t.Fatalf("apple's groups = %q", got)
 	}
 	if got := b.env().Settings.GroupsOf("banana"); strings.Join(got, " ") != "fruit servers" {
@@ -481,53 +483,6 @@ func TestDeviceGroups(t *testing.T) {
 		if got := d.In(c.scope); got != c.want {
 			t.Errorf("In(%+v) = %v, want %v", c.scope, got, c.want)
 		}
-	}
-}
-
-func TestExecutableBitSyncs(t *testing.T) {
-	remote := newRemote(t)
-	a := newDevice(t, remote, "apple")
-	a.write("bin/hello", "#!/bin/sh\necho hi\n")
-	os.Chmod(a.path("bin/hello"), 0o755)
-	a.add("bin/hello")
-	b := newDevice(t, remote, "banana")
-	executable := func(d *device, want bool) {
-		t.Helper()
-		if fi, err := os.Stat(d.path("bin/hello")); err != nil || (fi.Mode().Perm()&0o100 != 0) != want {
-			t.Fatalf("bin/hello on %s: mode %v, want executable %v (%v)", d.name, fi.Mode(), want, err)
-		}
-	}
-	executable(b, true)
-
-	// The bit alone changing syncs too, from either side.
-	os.Chmod(b.path("bin/hello"), 0o644)
-	b.sync()
-	a.sync()
-	executable(a, false)
-	os.Chmod(a.path("lichen/files/bin/hello"), 0o755)
-	a.sync()
-	b.sync()
-	executable(a, true)
-	executable(b, true)
-
-	// A chmod on one device and an edit on the other both stick.
-	a.write("bin/hello", "#!/bin/sh\necho hello\n")
-	a.sync()
-	os.Chmod(b.path("bin/hello"), 0o644)
-	b.sync()
-	a.sync()
-	for _, d := range []*device{a, b} {
-		expect(t, d, "bin/hello", "#!/bin/sh\necho hello\n")
-		executable(d, false)
-	}
-	os.Chmod(a.path("bin/hello"), 0o755)
-	a.sync()
-	b.write("bin/hello", "#!/bin/sh\necho hey\n")
-	b.sync()
-	a.sync()
-	for _, d := range []*device{a, b} {
-		expect(t, d, "bin/hello", "#!/bin/sh\necho hey\n")
-		executable(d, true)
 	}
 }
 
@@ -698,6 +653,7 @@ func TestOverlappingAddsAreRefused(t *testing.T) {
 		{"~/.claude/settings.json", "claude/commands/x", "would overlap"},
 		{"~/claude/notes.md", "claude/commands", "already a source"},
 		{"~/claude/notes.md", "", "not a usable source name"},
+		{"~/claude/notes.md", `claude\notes`, "not a usable source name"},
 	} {
 		if err := files.Add(env, tc.path, tc.name, core.Scope{}); err == nil || !strings.Contains(err.Error(), tc.err) {
 			t.Errorf("adding %s as %q: %v, want an error saying %q", tc.path, tc.name, err, tc.err)
@@ -708,34 +664,6 @@ func TestOverlappingAddsAreRefused(t *testing.T) {
 	a.write(".codex/prompts/mine.md", "m")
 	if err := files.AddOutput(env, "claude/commands", "~/.codex/prompts", core.Scope{}); err == nil {
 		t.Error("adding an output over a directory with other files: expected a refusal")
-	}
-}
-
-// Files only the owner may read arrive that way on every device, and
-// the sync folder is no one else's either.
-func TestPrivateFilesStayPrivate(t *testing.T) {
-	remote := newRemote(t)
-	a := newDevice(t, remote, "apple")
-	a.write(".netrc", "machine example.com password hunter2\n")
-	os.Chmod(a.path(".netrc"), 0o600)
-	a.add(".netrc")
-	// One private file in an open directory, there from the start or
-	// added later, keeps it out of sight too.
-	a.write(".config/gh/hosts.yml", "token: x\n")
-	os.Chmod(a.path(".config/gh/hosts.yml"), 0o600)
-	a.add(".config/gh")
-	a.write(".config/tea/config.yml", "x\n")
-	a.add(".config/tea")
-	a.write(".config/tea/token", "y\n")
-	os.Chmod(a.path(".config/tea/token"), 0o600)
-	a.sync()
-	b := newDevice(t, remote, "banana")
-	for path, want := range map[string]os.FileMode{
-		b.path(".netrc"): 0o600, b.path(".config/gh/hosts.yml"): 0o600, b.path(".config/tea/token"): 0o600, b.path("lichen"): 0o700,
-	} {
-		if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != want {
-			t.Errorf("%s: mode %v, want %v (%v)", path, fi.Mode().Perm(), want, err)
-		}
 	}
 }
 

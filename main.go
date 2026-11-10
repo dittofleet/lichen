@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	kitupdate "github.com/dittofleet/go-cli-kit/selfupdate"
@@ -262,7 +263,7 @@ func targets(args ...string) string {
 	out := make([]string, len(args))
 	for i, a := range args {
 		out[i] = a
-		if strings.HasPrefix(a, "/") || strings.HasPrefix(a, "~") || strings.HasPrefix(a, ".") {
+		if filepath.IsAbs(a) || strings.HasPrefix(a, "~") || strings.HasPrefix(a, ".") {
 			out[i] = tilde(a)
 		}
 	}

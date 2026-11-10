@@ -27,15 +27,24 @@ jobs:
       - name: Build all targets
         run: |
           mkdir -p dist
-          for combo in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
+          for combo in darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64; do
             os=${combo%-*}
             arch=${combo#*-}
             goarch=$arch
             [ "$arch" = "x64" ] && goarch=amd64
-            CGO_ENABLED=0 GOOS=$os GOARCH=$goarch \
-              go build -trimpath \
-                -ldflags="-s -w -X lichen/internal/version.Current=${{ github.ref_name }}" \
-                -o dist/lichen-${combo} .
+            ext=
+            [ "$os" = "windows" ] && ext=.exe
+            export CGO_ENABLED=0 GOOS=$os GOARCH=$goarch
+            go build -trimpath \
+              -ldflags="-s -w -X lichen/internal/version.Current=${{ github.ref_name }}" \
+              -o dist/lichen-${combo}${ext} .
+            if [ "$os" = "windows" ]; then
+              # lichenw starts the daemon at login with no console window,
+              # which is what building it as a windowed program gets.
+              go build -trimpath -ldflags="-s -w -H=windowsgui" \
+                -o dist/lichenw-${combo}${ext} \
+                github.com/dittofleet/go-cli-kit/cmd/windowless
+            fi
           done
 
       - name: Import Developer ID certificate
@@ -101,4 +110,4 @@ jobs:
         run: |
           gh release create "${GITHUB_REF_NAME}" \
             --generate-notes \
-            dist/lichen-*
+            dist/*

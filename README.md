@@ -2,8 +2,8 @@
 
 # lichen
 
-A project for easily keeping dev environments in sync across your Macs
-and Linux machines.
+A project for easily keeping dev environments in sync across your Macs,
+Linux and Windows machines.
 
 It syncs things, one module per kind of thing:
 
@@ -35,10 +35,20 @@ then on every device:
 curl -fsSL https://raw.githubusercontent.com/dittofleet/.github/main/install.sh | sh -s lichen
 ```
 
+On Windows, in PowerShell:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/dittofleet/.github/main/install.ps1))) lichen
+```
+
 It asks for the sync repo's URL (or takes it from `LICHEN_REPO`), clones
 it to `~/lichen`, and starts the daemon: a launchd agent on macOS, a
 systemd user service on Linux. `lichen setup <git url>` does the same
 later, if you skip the question.
+
+On Windows (x64) the daemon is one of your startup apps, listed as
+`lichenw`, the program that starts it at login with no window. Nothing
+starts it again if it stops before your next login: `lichen start` does.
 
 ## The sync folder
 
@@ -84,8 +94,8 @@ Skills and MCP servers work the same way, and [inserts](#inserts) use
 `if` and `unless`. A device that falls out of scope keeps its files as
 plain files and uninstalls its skills and servers.
 
-`lichen devices` lists device names (crosstalk's) and their groups. `mac`
-and `linux` are built-in groups. Custom groups are stored in `~/lichen/lichen.toml`:
+`lichen devices` lists device names (crosstalk's) and their groups. `mac`,
+`linux` and `windows` are built-in groups. Custom groups are stored in `~/lichen/lichen.toml`:
 
 ```sh
 lichen groups add servers hetzner-1 hetzner-2
@@ -104,6 +114,10 @@ output where it came from. Every device writes the outputs meant for it,
 and editing either side syncs: the output (`~/.zshrc`) or the source
 (`~/lichen/files/shell/zshrc`). A directory syncs as a whole, including
 files added to it later.
+
+A file is the same on every device byte for byte: line endings are never
+converted, whatever git is set to do. On Windows a path can also be
+written `~\.gitconfig`.
 
 `lichen files` shows every source and where it goes, and `lichen files
 preview <source|path> [<device>]` prints a file as a device writes it,
@@ -125,6 +139,18 @@ Edit any of them and the others follow. `lichen files include` and
 When a device joins with its own copy of a file that is already synced,
 the synced version replaces it. A file only you can read (`~/.netrc`,
 say) is written that way everywhere.
+
+Windows marks no file as executable or as only yours to read. A script
+first added there becomes executable everywhere once you `chmod +x` it on
+a Mac or Linux device, and a file only you may read is best added from
+one.
+
+Windows does not allow some file names (`a:b`, `what?`, `aux`), and to
+Windows and macOS two names that differ only by case are one name. A
+device that can't hold a file another one added takes in nothing more
+until the file is renamed where it came from, and its log says which
+file. Nothing is deleted meanwhile, and what was changed on that device
+is sent once it syncs again.
 
 ### Inserts
 
@@ -207,8 +233,8 @@ lichen skills add owner/single-skill-repo
 ```
 
 The canonical copy lands in `~/.agents/skills/<name>` with a relative
-symlink from `~/.claude/skills/<name>`, the same layout `npx skills`
-creates, so Claude Code picks the skill up globally and both tools
+symlink from `~/.claude/skills/<name>` (a junction on Windows), the same
+layout `npx skills` creates, so Claude Code picks the skill up globally and both tools
 coexist: lichen never touches a skill it didn't install. Other harnesses
 get links too by listing their skill directories in the skills config:
 

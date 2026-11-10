@@ -67,6 +67,11 @@ func Add(env *core.Env, p, name string, scope core.Scope) error {
 	if err := validName(name); err != nil {
 		return err
 	}
+	// A backslash is part of a name on a Mac or Linux and parts two names
+	// on Windows, and a source is named the same on every device.
+	if strings.Contains(name, `\`) {
+		return fmt.Errorf(`%q is not a usable source name (its parts go between slashes, as in claude/commands)`, name)
+	}
 	c, err := loadConfig(env)
 	if err != nil {
 		return err
@@ -101,7 +106,7 @@ func Add(env *core.Env, p, name string, scope core.Scope) error {
 	}
 	// One source inside another would have its files synced twice.
 	for e := range c.Sources {
-		if config.Within(name, e) || config.Within(e, name) {
+		if inside(name, e) || inside(e, name) {
 			return fmt.Errorf("%s would overlap the source %s: pick another name", name, e)
 		}
 	}
@@ -134,7 +139,7 @@ func Add(env *core.Env, p, name string, scope core.Scope) error {
 	// A source deleted around this one is gone for good: it would
 	// otherwise look like it came back.
 	for d := range dead {
-		if config.Within(name, d) || config.Within(d, name) {
+		if inside(name, d) || inside(d, name) {
 			delete(dead, d)
 		}
 	}
@@ -358,7 +363,7 @@ func Resolve(env *core.Env, p, keep string, into []string) error {
 		}
 	}
 	if err := take(env, st, rec.want(abs), sources, live); err != nil {
-		return err
+		return fmt.Errorf("%s: %w", p, err)
 	}
 	return st.save()
 }
@@ -531,7 +536,7 @@ func Preview(env *core.Env, target string, d core.Device) (content []byte, off b
 		return nil, false, err
 	}
 	for n, s := range c.Sources {
-		if config.Within(file, n) {
+		if inside(file, n) {
 			off = !slices.ContainsFunc(s.To, func(o Output) bool { return d.In(o.Scope) })
 		}
 	}

@@ -11,11 +11,9 @@ import (
 	"errors"
 	"log"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"slices"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -37,7 +35,7 @@ const pollInterval = time.Hour
 
 func Run() error {
 	lg := log.New(os.Stdout, "", log.LstdFlags)
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := untilStopped()
 	defer stop()
 
 	lg.Printf("lichen %s starting", version.Current)
@@ -100,7 +98,7 @@ func Run() error {
 			lastErr = ""
 			lg.Printf("events: connected, catching up")
 			go func() {
-				if err := events.PostOS(core.OS()); err != nil {
+				if err := events.PostOS(core.OS); err != nil {
 					lg.Printf("events: posting this device's OS: %v", err)
 				}
 			}()
@@ -173,11 +171,11 @@ const updateBackoff = 10 * time.Minute
 
 var lastUpdateAttempt time.Time
 
-// autoUpdate installs the release the sync folder requires and execs it
-// in place of this process. On failure the daemon stays up with syncing
-// paused until a later pass gets through.
+// autoUpdate installs the release the sync folder requires and hands
+// over to it. On failure the daemon stays up with syncing paused until a
+// later pass gets through.
 //
-// The env guard survives the exec: if the installed release does not
+// The env guard survives the handover: if the installed release does not
 // actually clear the requirement it was installed for (a mis-stamped
 // asset), the fresh process must not download it again in a tight loop.
 // A LATER requirement re-arms it.
@@ -198,8 +196,8 @@ func autoUpdate(lg *log.Logger, repoV string) {
 	}
 	lg.Printf("update: installed %s, restarting the daemon on it", tag)
 	os.Setenv("LICHEN_AUTOUPDATED", repoV)
-	if err := selfupdate.ExecSelf(); err != nil {
-		lg.Printf("update: exec: %v", err)
+	if err := handOver(); err != nil {
+		lg.Printf("update: restarting: %v", err)
 	}
 }
 

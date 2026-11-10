@@ -17,7 +17,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"lichen/internal/config"
@@ -72,7 +71,7 @@ func open(ctx context.Context, req request, answer any) (net.Conn, *bufio.Scanne
 	var d net.Dialer
 	c, err := d.DialContext(ctx, "unix", sock)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {
+		if absent(err) {
 			return nil, nil, ErrNotRunning
 		}
 		return nil, nil, err
