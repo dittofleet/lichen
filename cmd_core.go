@@ -6,11 +6,9 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 
 	clikit "github.com/dittofleet/go-cli-kit"
 	"github.com/dittofleet/go-cli-kit/postinstall"
@@ -196,7 +194,7 @@ func cmdDevices() error {
 	if oses == nil {
 		oses = map[string]string{}
 	}
-	oses[env.Device.Name] = core.OS()
+	oses[env.Device.Name] = core.OS
 	width := 0
 	for _, d := range devices {
 		width = max(width, len(d.Name))
@@ -261,7 +259,7 @@ func cmdGroupsList() error {
 	for _, g := range slices.Sorted(maps.Keys(groups)) {
 		fmt.Printf("%-*s  %s\n", width, g, strings.Join(groups[g], ", "))
 	}
-	fmt.Println(dim("built in: mac, linux"))
+	fmt.Println(dim("built in: " + strings.Join(core.OSGroups, ", ")))
 	return nil
 }
 
@@ -270,11 +268,7 @@ func cmdLogs() error {
 	if err != nil {
 		return err
 	}
-	tail, err := exec.LookPath("tail")
-	if err != nil {
-		return err
-	}
-	return syscall.Exec(tail, []string{"tail", "-n", "50", "-F", p}, os.Environ())
+	return followLog(p)
 }
 
 func cmdDaemonCtl(action string) error {

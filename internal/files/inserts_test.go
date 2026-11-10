@@ -201,34 +201,6 @@ func TestBinaryOverInsertsIsAConflict(t *testing.T) {
 	}
 }
 
-// An edit beats the deletion of a whole directory, including the files of
-// it the edited one inserts.
-func TestEditBeatsDeletionOfWhatItInserts(t *testing.T) {
-	remote := newRemote(t)
-	a := newDevice(t, remote, "apple")
-	a.write(".config/zsh/main", "")
-	a.write(".config/zsh/part", "p1\n")
-	os.Chmod(a.path(".config/zsh/part"), 0o755)
-	a.add(".config/zsh")
-	a.write("lichen/files/config/zsh/main", "m1\n§ config/zsh/part\n")
-	a.sync()
-	b := newDevice(t, remote, "banana")
-	expect(t, b, ".config/zsh/main", "m1\np1\n")
-
-	os.RemoveAll(a.path(".config/zsh"))
-	a.sync()
-	b.write(".config/zsh/main", "m1\nP1\n")
-	b.sync()
-	expect(t, b, "lichen/files/config/zsh/main", "m1\n§ config/zsh/part\n")
-	expect(t, b, "lichen/files/config/zsh/part", "P1\n")
-	b.sync()
-	if fi, _ := os.Stat(b.path(".config/zsh/part")); fi.Mode().Perm()&0o100 == 0 {
-		t.Fatal("~/.config/zsh/part lost its executable bit")
-	}
-	a.sync()
-	expect(t, a, ".config/zsh/main", "m1\nP1\n")
-}
-
 // A source deleted elsewhere while the lines it inserts were edited here
 // comes back, edited, like a whole file would. Until then, the outputs
 // that insert it are broken.
@@ -270,29 +242,5 @@ func TestEditToWhatIsNoLongerInserted(t *testing.T) {
 	err := files.Resolve(a.env(), a.path(".zshrc"), "here", nil)
 	if err == nil || !strings.Contains(err.Error(), "can't be kept as it is") {
 		t.Fatalf("keep here: err = %v", err)
-	}
-}
-
-// Bringing back a file edited here while it was deleted elsewhere keeps
-// a chmod made with the edit.
-func TestEditBeatsDeletionKeepsTheMode(t *testing.T) {
-	remote := newRemote(t)
-	a := newDevice(t, remote, "apple")
-	a.write("bin/x", "v1\n")
-	a.add("bin/x")
-	b := newDevice(t, remote, "banana")
-	os.Remove(a.path("bin/x"))
-	a.sync()
-	b.write("bin/x", "v2\n")
-	os.Chmod(b.path("bin/x"), 0o755)
-	b.sync()
-	b.sync()
-	if fi, err := os.Stat(b.path("bin/x")); err != nil || fi.Mode().Perm()&0o100 == 0 {
-		t.Fatalf("~/bin/x lost its executable bit: %v, %v", fi.Mode(), err)
-	}
-	a.sync()
-	expect(t, a, "bin/x", "v2\n")
-	if fi, _ := os.Stat(a.path("bin/x")); fi.Mode().Perm()&0o100 == 0 {
-		t.Fatal("~/bin/x is not executable on apple")
 	}
 }

@@ -78,6 +78,7 @@ func TestValidate(t *testing.T) {
 func TestReconcile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("LICHEN_DIR", "")
 	t.Setenv("XDG_DATA_HOME", "")
 	claude := &fake{id: "claude", servers: map[string]Server{"mine": {Command: "own"}}}

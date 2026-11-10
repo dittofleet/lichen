@@ -158,6 +158,12 @@ func validName(name string) error {
 	return nil
 }
 
+// inside reports whether a source name is other or lies inside it. The
+// names are slashed on every OS, unlike the paths config.Within takes.
+func inside(name, other string) bool {
+	return name == other || strings.HasPrefix(name, other+"/")
+}
+
 // root is where an output goes, absolute.
 func (o Output) root() (string, error) {
 	abs, err := config.ExpandHome(o.Path)

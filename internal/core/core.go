@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"strings"
 
@@ -26,7 +25,7 @@ const SettingsFile = "lichen.toml"
 
 type Settings struct {
 	// Groups names sets of devices, for scoping what goes where. Every
-	// device is also in the group named after its OS ("mac" or "linux").
+	// device is also in the group named after its OS (see OSGroups).
 	Groups map[string][]string `toml:"groups,omitempty"`
 	// Backups keeps files lichen overwrites or deletes in
 	// ~/lichen-backups instead of removing them (see internal/backup).
@@ -73,7 +72,7 @@ func (e *Env) Reload() error {
 		return err
 	}
 	e.Settings = s
-	e.Device = s.Device(e.Device.Name, OS())
+	e.Device = s.Device(e.Device.Name, OS)
 	return nil
 }
 
@@ -96,7 +95,7 @@ func (e *Env) EditGroup(add bool, group string, devices []string) error {
 			return err
 		}
 	}
-	if group == "mac" || group == "linux" {
+	if slices.Contains(OSGroups, group) {
 		return fmt.Errorf("%s is a group of its own already", group)
 	}
 	groups := e.Settings.Groups
@@ -175,19 +174,14 @@ func (d Device) named(names []string) bool {
 	return slices.ContainsFunc(names, func(n string) bool { return n == d.Name || slices.Contains(d.Groups, n) })
 }
 
-// Device is the device named name, on the OS group osGroup ("mac" or
-// "linux"), in the groups s puts it in.
+// Device is the device named name, on the OS group osGroup, in the groups
+// s puts it in.
 func (s Settings) Device(name, osGroup string) Device {
 	return Device{Name: name, Groups: append([]string{osGroup}, s.GroupsOf(name)...)}
 }
 
-// OS is this device's OS group: "mac" or "linux".
-func OS() string {
-	if runtime.GOOS == "darwin" {
-		return "mac"
-	}
-	return runtime.GOOS
-}
+// OSGroups are the groups named after an OS. Every device is in one.
+var OSGroups = []string{"mac", "linux", "windows"}
 
 // DeviceName is the name crosstalk knows this machine by, so a device is
 // called the same thing everywhere. It is remembered for when crosstalk

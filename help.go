@@ -109,7 +109,7 @@ var help = []helpSection{
 				"devices and groups, either included or excluded. Without one, everything goes " +
 				"to every device. Set it with --include or --exclude when adding, or with the " +
 				"module's include and exclude commands.\n\n" +
-				"mac and linux are built-in groups. Custom groups are stored in " +
+				"mac, linux and windows are built-in groups. Custom groups are stored in " +
 				"~/lichen/lichen.toml and shared by all devices.",
 			subs: []helpSub{
 				{"list", "groups [list]", "List groups and their devices", ""},
@@ -118,7 +118,7 @@ var help = []helpSection{
 				{"remove", "groups remove <group> [<device>...]", "Remove devices from a group",
 					"With no devices, or once the last one is removed, deletes the group."},
 			},
-			outro: "Names are lowercase letters, digits and dashes. mac and linux are reserved.\n\n" +
+			outro: "Names are lowercase letters, digits and dashes. mac, linux and windows are reserved.\n\n" +
 				"Examples\n" +
 				"  lichen groups add servers hetzner-1 hetzner-2\n" +
 				"  lichen files add ~/.zshrc shell/zshrc --exclude servers\n" +

@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -56,20 +55,15 @@ func DataDir() (string, error) {
 	return xdg.DataDir("lichen"), nil
 }
 
-func LogPath() (string, error) {
-	if runtime.GOOS == "darwin" {
-		return HomeJoin("Library", "Logs", "lichen.log")
-	}
-	return HomeJoin(".local", "state", "lichen", "lichen.log")
-}
-
+// ExpandHome resolves a path written from the home directory, as ~/ and
+// on Windows also as ~\, which its shells leave for the program to do.
 func ExpandHome(p string) (string, error) {
-	if p == "~" || strings.HasPrefix(p, "~/") {
+	if p == "~" || len(p) > 1 && p[0] == '~' && os.IsPathSeparator(p[1]) {
 		home, err := Home()
 		if err != nil {
 			return "", err
 		}
-		return filepath.Join(home, strings.TrimPrefix(p, "~")), nil
+		return filepath.Join(home, p[1:]), nil
 	}
 	return p, nil
 }
@@ -80,7 +74,14 @@ func Abs(p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Abs(abs)
+	if abs, err = filepath.Abs(abs); err != nil {
+		return "", err
+	}
+	home, err := Home()
+	if err != nil {
+		return "", err
+	}
+	return spelled(abs, home), nil
 }
 
 // Within reports whether p is root or lies inside it. The separator
@@ -116,7 +117,7 @@ func ContractHome(abs string) string {
 		return abs
 	}
 	rel, err := filepath.Rel(home, abs)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return abs
 	}
 	if rel == "." {
@@ -210,9 +211,12 @@ func WriteFile(path string, data []byte, perm os.FileMode) error {
 	if err := os.WriteFile(tmp, data, perm); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmp, perm); err != nil {
-		os.Remove(tmp)
-		return err
+	err := os.Chmod(tmp, perm)
+	if err == nil {
+		err = replace(tmp, path)
 	}
-	return os.Rename(tmp, path)
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
 }
