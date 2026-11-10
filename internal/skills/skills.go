@@ -845,11 +845,12 @@ func run(env *core.Env, force bool) error {
 // AddSource records a repo (optionally narrowed to some skills) as a
 // skill source, saves the skills config, and returns the source as saved,
 // under its canonical key. Install happens on the next reconcile, which
-// the CLI runs immediately after. A scope of every device leaves an
-// existing source's devices as they were. A repo without the skills named, or without any,
-// is refused before anything is saved: every device would otherwise go
+// the CLI runs immediately after. It goes to the devices scope names, or
+// only here when it names none, and a source that is already there
+// keeps its own devices too (see core.Env.Adding). A repo without the skills named, or
+// without any, is refused before anything is saved: every device would otherwise go
 // on failing to install them.
-func AddSource(spec string, names []string, scope core.Scope, lg *log.Logger) (Source, error) {
+func AddSource(env *core.Env, spec string, names []string, scope core.Scope) (Source, error) {
 	key, url, err := parseSpec(spec)
 	if err != nil {
 		return Source{}, err
@@ -865,7 +866,7 @@ func AddSource(spec string, names []string, scope core.Scope, lg *log.Logger) (S
 			return Source{}, fmt.Errorf("invalid skill name %q", raw)
 		}
 	}
-	if err := hasSkills(key, url, names, lg); err != nil {
+	if err := hasSkills(key, url, names, env.Log); err != nil {
 		return Source{}, err
 	}
 	slices.Sort(names)
@@ -881,14 +882,12 @@ func AddSource(spec string, names []string, scope core.Scope, lg *log.Logger) (S
 		case src.Skills != nil:
 			sources[i].Skills = slices.Compact(slices.Sorted(slices.Values(append(src.Skills, names...))))
 		}
-		if !scope.Everywhere() {
-			sources[i].Scope = scope
-		}
+		sources[i].Scope = env.Adding(src.Scope, scope)
 		saved := sources[i]
 		saved.Repo = key
 		return saved, saveSources(sources)
 	}
-	sources = append(sources, Source{Repo: key, Skills: names, Scope: scope})
+	sources = append(sources, Source{Repo: key, Skills: names, Scope: env.Adding(core.Scope{}, scope)})
 	return sources[len(sources)-1], saveSources(sources)
 }
 
@@ -917,8 +916,8 @@ func hasSkills(key, url string, names []string, lg *log.Logger) error {
 	return nil
 }
 
-// SetScope scopes a repo's skills to devices.
-func SetScope(spec string, scope core.Scope) error {
+// SetScope changes the scope of a repo's skills through edit.
+func SetScope(spec string, edit func(core.Scope) core.Scope) error {
 	key, _, err := parseSpec(spec)
 	if err != nil {
 		return err
@@ -930,7 +929,7 @@ func SetScope(spec string, scope core.Scope) error {
 	found := false
 	for i, src := range sources {
 		if k, _, err := parseSpec(src.Repo); err == nil && k == key {
-			sources[i].Scope, found = scope, true
+			sources[i].Scope, found = edit(sources[i].Scope), true
 		}
 	}
 	if !found {

@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"lichen/internal/core"
@@ -99,10 +100,10 @@ func TestReconcile(t *testing.T) {
 	}
 
 	pw := Server{Command: "bunx", Args: []string{"@playwright/mcp@latest"}}
-	if err := AddServer("pw", pw); err != nil {
+	if _, err := AddServer(env, "pw", pw); err != nil {
 		t.Fatal(err)
 	}
-	if err := AddServer("mine", Server{URL: "https://example.com/mcp"}); err != nil {
+	if _, err := AddServer(env, "mine", Server{URL: "https://example.com/mcp"}); err != nil {
 		t.Fatal(err)
 	}
 	reconcile()
@@ -133,7 +134,7 @@ func TestReconcile(t *testing.T) {
 
 	// A changed server is replaced, everywhere lichen installed it.
 	pw.Args = []string{"@playwright/mcp@1.0.0"}
-	if err := AddServer("pw", pw); err != nil {
+	if _, err := AddServer(env, "pw", pw); err != nil {
 		t.Fatal(err)
 	}
 	reconcile()
@@ -145,36 +146,41 @@ func TestReconcile(t *testing.T) {
 
 	// A server for other devices is removed here, and comes back when
 	// this device is in again. A scope change alone reinstalls nothing.
-	if err := SetScope("pw", core.Scope{Include: []string{"linux"}}); err != nil {
-		t.Fatal(err)
+	scope := func(edit func(core.Scope) core.Scope) {
+		t.Helper()
+		if err := SetScope("pw", edit); err != nil {
+			t.Fatal(err)
+		}
+		reconcile()
 	}
-	reconcile()
+	with := func(n string) func(core.Scope) core.Scope { return func(s core.Scope) core.Scope { return s.With(n) } }
+	without := func(n string) func(core.Scope) core.Scope {
+		return func(s core.Scope) core.Scope { return env.Settings.Without(s, n) }
+	}
+	scope(without("lychee"))
 	expect(claude, "remove pw")
 	expect(codex, "remove pw")
-	if err := SetScope("pw", core.Scope{Include: []string{"mac"}}); err != nil {
-		t.Fatal(err)
-	}
-	reconcile()
+	scope(with("mac"))
 	expect(claude, "add pw")
 	expect(codex, "add pw")
-	if err := SetScope("pw", core.Scope{Include: []string{"lychee"}}); err != nil {
-		t.Fatal(err)
+	scope(with("lychee"))
+	expect(claude)
+	expect(codex)
+	scope(without("lychee")) // still in mac, so excluded
+	expect(claude, "remove pw")
+	expect(codex, "remove pw")
+	scope(with("lychee"))
+	expect(claude, "add pw")
+	expect(codex, "add pw")
+
+	// Adding it again, from another device, keeps the devices it had.
+	elsewhere := &core.Env{Device: core.Device{Name: "hetzner", Groups: []string{"linux"}}}
+	if s, err := AddServer(elsewhere, "pw", pw); err != nil || core.Describe(s.Scope) != "mac, lychee, hetzner" {
+		t.Fatalf("re-added: %v %v", s.Scope, err)
 	}
 	reconcile()
 	expect(claude)
 	expect(codex)
-	if err := SetScope("pw", core.Scope{Exclude: []string{"lychee"}}); err != nil {
-		t.Fatal(err)
-	}
-	reconcile()
-	expect(claude, "remove pw")
-	expect(codex, "remove pw")
-	if err := SetScope("pw", core.Scope{}); err != nil {
-		t.Fatal(err)
-	}
-	reconcile()
-	expect(claude, "add pw")
-	expect(codex, "add pw")
 
 	// A harness that is missing on this machine is skipped, and what
 	// lichen installed there earlier is left as is.
@@ -194,7 +200,7 @@ func TestReconcile(t *testing.T) {
 
 	// A config entry this build rejects keeps its installs.
 	p, _ := ConfigPath()
-	if err := os.WriteFile(p, []byte("[pw]\n"), 0o644); err != nil {
+	if err := os.WriteFile(p, []byte("[pw]\ninclude = [\"all\"]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	reconcile()
@@ -211,6 +217,17 @@ func TestReconcile(t *testing.T) {
 	expect(claude)
 	expect(codex)
 
+	// Nor is a server excluded from devices but included on none, as
+	// "every device but" was written before scopes were opt-in.
+	if err := os.WriteFile(p, []byte("[pw]\ncommand = \"bunx\"\nexclude = [\"servers\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Reconcile(env); err == nil || !strings.Contains(err.Error(), "exclude needs include") {
+		t.Errorf("exclude with no include: %v", err)
+	}
+	expect(claude)
+	expect(codex)
+
 	// No mcp.toml at all is not "remove everything".
 	if err := os.Remove(p); err != nil {
 		t.Fatal(err)
@@ -220,7 +237,7 @@ func TestReconcile(t *testing.T) {
 	expect(codex)
 
 	// Removing the last server uninstalls it everywhere.
-	if err := AddServer("pw", pw); err != nil {
+	if _, err := AddServer(env, "pw", pw); err != nil {
 		t.Fatal(err)
 	}
 	if err := RemoveServers([]string{"pw"}); err != nil {

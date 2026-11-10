@@ -44,14 +44,15 @@ var help = []helpSection{
 				{"list", "files [list]", "List sources and their outputs", ""},
 				{"preview", "files preview <source|path> [<device>]", "Show a file as a device writes it",
 					"This device when none is named."},
-				{"add", "files add <path> <source> [--include|--exclude <devices,groups>]", "Sync a file or directory",
-					"The source is its name in ~/lichen/files, like shell/zshrc."},
-				{"add", "files add <path> --to <source> [--include|--exclude <devices,groups>]", "Add an output to a source", ""},
+				{"add", "files add <path> <source> [--include <devices,groups> [--exclude <devices,groups>]]", "Sync a file or directory",
+					"The source is its name in ~/lichen/files, like shell/zshrc. For this device only, unless --include names others."},
+				{"add", "files add <path> --to <source> [--include <devices,groups> [--exclude <devices,groups>]]", "Add an output to a source",
+					"For this device only, unless --include names others."},
 				{"remove", "files remove <source|path>...", "Stop syncing", "Outputs stay as plain files."},
-				{"include", "files include <source|path> <device|group>...", "Limit outputs to these devices",
+				{"include", "files include <source|path> <device|group>...", "Write outputs to these devices too",
 					"A path targets one output, a source name all of its outputs."},
-				{"exclude", "files exclude <source|path> [<device|group>...]", "Write outputs to all but these devices",
-					"With no devices, reverts to every device."},
+				{"exclude", "files exclude <source|path> <device|group>...", "Stop writing outputs to these devices",
+					"A path targets one output, a source name all of its outputs."},
 				{"recover", "files recover <source|path>...", "Restore deleted files on every device", ""},
 			},
 		},
@@ -62,12 +63,11 @@ var help = []helpSection{
 			about: "Installed to ~/.agents/skills and linked from ~/.claude/skills. Repos are " +
 				"checked for updates hourly.",
 			subs: []helpSub{
-				{"add", "skills add <repo> [--skill <name>]... [--include|--exclude <devices,groups>]", "Sync skills from a public repo",
-					"All skills in the repo, or the ones named with --skill."},
+				{"add", "skills add <repo> [--skill <name>]... [--include <devices,groups> [--exclude <devices,groups>]]", "Sync skills from a public repo",
+					"All skills in the repo, or the ones named with --skill. For this device only, unless --include names others."},
 				{"remove", "skills remove <repo|skill>...", "Stop syncing and uninstall", ""},
-				{"include", "skills include <repo> <device|group>...", "Limit a repo's skills to these devices", ""},
-				{"exclude", "skills exclude <repo> [<device|group>...]", "Install on all but these devices",
-					"With no devices, reverts to every device."},
+				{"include", "skills include <repo> <device|group>...", "Install a repo's skills on these devices too", ""},
+				{"exclude", "skills exclude <repo> <device|group>...", "Uninstall a repo's skills from these devices", ""},
 				{"list", "skills list", "List synced skills", ""},
 				{"update", "skills update", "Check repos for updates now", ""},
 			},
@@ -79,13 +79,12 @@ var help = []helpSection{
 			about: "Installed at user scope through each harness's CLI. Missing harnesses are " +
 				"skipped. Running sessions need a restart to see changes.",
 			subs: []helpSub{
-				{"add", "mcp add <name> [--include|--exclude <devices,groups>] <command> [<arg>...]", "Add a server that runs a command",
-					"Flags go before the command."},
-				{"add", "mcp add <name> [--include|--exclude <devices,groups>] <url>", "Add a server at a URL", ""},
+				{"add", "mcp add <name> [--include <devices,groups> [--exclude <devices,groups>]] <command> [<arg>...]", "Add a server that runs a command",
+					"Flags go before the command. For this device only, unless --include names others."},
+				{"add", "mcp add <name> [--include <devices,groups> [--exclude <devices,groups>]] <url>", "Add a server at a URL", ""},
 				{"remove", "mcp remove <name>...", "Stop syncing and uninstall", ""},
-				{"include", "mcp include <name> <device|group>...", "Limit a server to these devices", ""},
-				{"exclude", "mcp exclude <name> [<device|group>...]", "Install on all but these devices",
-					"With no devices, reverts to every device."},
+				{"include", "mcp include <name> <device|group>...", "Install a server on these devices too", ""},
+				{"exclude", "mcp exclude <name> <device|group>...", "Uninstall a server from these devices", ""},
 				{"list", "mcp list", "List synced servers", ""},
 			},
 		},
@@ -105,12 +104,13 @@ var help = []helpSection{
 			name:    "groups",
 			usage:   "groups [<command>]",
 			summary: "Manage device groups",
-			about: "A scope decides which devices get a file, skill repo or server: a list of " +
-				"devices and groups, either included or excluded. Without one, everything goes " +
-				"to every device. Set it with --include or --exclude when adding, or with the " +
-				"module's include and exclude commands.\n\n" +
-				"mac, linux and windows are built-in groups. Custom groups are stored in " +
-				"~/lichen/lichen.toml and shared by all devices.",
+			about: "A scope decides which devices get a file, skill repo or server: the devices " +
+				"and groups it includes, but none it excludes. Nothing goes to a device it doesn't " +
+				"name, and adding something names only this device unless --include names others. " +
+				"Change it with the module's include and exclude commands.\n\n" +
+				"all (every device, including ones that join later), mac, linux and windows are " +
+				"built-in groups. Custom groups are stored in ~/lichen/lichen.toml and shared by " +
+				"all devices.",
 			subs: []helpSub{
 				{"list", "groups [list]", "List groups and their devices", ""},
 				{"add", "groups add <group> <device>...", "Add devices to a group",

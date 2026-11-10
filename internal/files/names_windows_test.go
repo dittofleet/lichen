@@ -82,7 +82,10 @@ func TestAHomeTypedInAnotherCase(t *testing.T) {
 	if typed == a.path(".config/tool") {
 		t.Skip("the home directory has no letters to change the case of")
 	}
-	a.change(func(env *core.Env) error { return files.Add(env, typed, "tool", core.Scope{}) })
+	a.change(func(env *core.Env) error {
+		_, err := files.Add(env, typed, "tool", core.Scope{Include: []string{core.All}})
+		return err
+	})
 	b := newDevice(t, remote, "banana")
 	expect(t, b, ".config/tool/one", "1\n")
 	a.change(func(env *core.Env) error {

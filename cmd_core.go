@@ -259,7 +259,7 @@ func cmdGroupsList() error {
 	for _, g := range slices.Sorted(maps.Keys(groups)) {
 		fmt.Printf("%-*s  %s\n", width, g, strings.Join(groups[g], ", "))
 	}
-	fmt.Println(dim("built in: " + strings.Join(core.OSGroups, ", ")))
+	fmt.Println(dim("built in: " + strings.Join(core.BuiltIn, ", ")))
 	return nil
 }
 

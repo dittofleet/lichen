@@ -296,23 +296,26 @@ func Reconcile(env *core.Env) error {
 	return man.save()
 }
 
-// AddServer records a server in the mcp config, replacing any server of
-// the same name. Install happens on the next reconcile, which the CLI
-// runs immediately after.
-func AddServer(name string, s Server) error {
+// AddServer records a server in the mcp config, for the devices s's
+// scope names, or only here when it names none, and returns it as saved.
+// A server of the same name is replaced, keeping its devices too (see
+// core.Env.Adding). Install happens on the next reconcile, which the
+// CLI runs immediately after.
+func AddServer(env *core.Env, name string, s Server) (Server, error) {
 	if err := validate(name, s); err != nil {
-		return err
+		return s, err
 	}
 	cfg, _, err := loadConfig()
 	if err != nil {
-		return err
+		return s, err
 	}
+	s.Scope = env.Adding(cfg.Servers[name].Scope, s.Scope)
 	cfg.Servers[name] = s
-	return saveServers(cfg.Servers)
+	return s, saveServers(cfg.Servers)
 }
 
-// SetScope scopes a server to devices.
-func SetScope(name string, scope core.Scope) error {
+// SetScope changes the scope of a server through edit.
+func SetScope(name string, edit func(core.Scope) core.Scope) error {
 	cfg, _, err := loadConfig()
 	if err != nil {
 		return err
@@ -321,7 +324,7 @@ func SetScope(name string, scope core.Scope) error {
 	if !ok {
 		return fmt.Errorf("%q is not a synced MCP server (see: lichen mcp list)", name)
 	}
-	s.Scope = scope
+	s.Scope = edit(s.Scope)
 	cfg.Servers[name] = s
 	return saveServers(cfg.Servers)
 }
