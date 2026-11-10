@@ -142,11 +142,11 @@ func change(subject string, edit func(env *core.Env) error) error {
 	})
 }
 
-// cmdScope runs `<module> include|exclude <thing> [<device|group>...]`,
-// scoping the thing through set. Excluding nothing is every device
-// again.
-func cmdScope(module string, args []string, set func(env *core.Env, thing string, scope core.Scope) error) error {
-	if len(args) < 2 || (args[0] == "include" && len(args) < 3) {
+// cmdScope runs `<module> include|exclude <thing> <device|group>...`,
+// bringing the devices into the thing's scope or taking them out of it
+// through set.
+func cmdScope(module string, args []string, set func(env *core.Env, thing string, edit func(core.Scope) core.Scope) error) error {
+	if len(args) < 3 {
 		return usage(module, args[0])
 	}
 	thing, names := args[1], args[2:]
@@ -155,12 +155,20 @@ func cmdScope(module string, args []string, set func(env *core.Env, thing string
 			return err
 		}
 	}
-	scope := core.Scope{Exclude: names}
-	if args[0] == "include" {
-		scope = core.Scope{Include: names}
+	include := args[0] == "include"
+	msg := "%s: %s no longer goes to %s"
+	if include {
+		msg = "%s: %s also goes to %s"
 	}
-	msg := fmt.Sprintf("%s: %s goes to %s", module, targets(thing), core.Describe(scope))
-	if err := change(msg, func(env *core.Env) error { return set(env, thing, scope) }); err != nil {
+	msg = fmt.Sprintf(msg, module, targets(thing), strings.Join(names, ", "))
+	if err := change(msg, func(env *core.Env) error {
+		return set(env, thing, func(s core.Scope) core.Scope {
+			if include {
+				return s.With(names...)
+			}
+			return env.Settings.Without(s, names...)
+		})
+	}); err != nil {
 		return err
 	}
 	fmt.Println(msg)
@@ -168,11 +176,8 @@ func cmdScope(module string, args []string, set func(env *core.Env, thing string
 }
 
 // scopeFlag adds to scope from --include or --exclude and a comma list
-// of devices and groups. A thing has one or the other.
+// of devices and groups.
 func scopeFlag(scope *core.Scope, flag, list string) error {
-	if (flag == "--include" && scope.Exclude != nil) || (flag == "--exclude" && scope.Include != nil) {
-		return errors.New("use --include or --exclude, not both")
-	}
 	var names []string
 	for _, n := range strings.Split(list, ",") {
 		if n = strings.TrimSpace(n); n == "" {

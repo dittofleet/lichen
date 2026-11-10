@@ -73,6 +73,8 @@ include = ["mac"]
 
 ["~/.codex/AGENTS.md"]
 source = "agents/CLAUDE.md"
+include = ["mac", "servers"]
+exclude = ["hetzner-2"]
 ```
 
 Edit anything in it and lichen commits and pushes it. You never run git
@@ -80,22 +82,28 @@ there yourself, but its history is all there.
 
 ## Which devices get what
 
-Everything syncs to every device unless scoped. A scope is a list of
-devices and groups, either included or excluded:
+Nothing syncs to a device that isn't named. Every file output, skill
+repo and server has a scope: the devices and groups it goes to. Adding
+something names only the device it was added on, unless `--include`
+names others:
 
 ```sh
-lichen files add ~/.zshrc shell/zshrc --include mac,lychee
-lichen files add ~/.vimrc vim/vimrc --exclude servers
-lichen files include ~/.zshrc mac   # change it later
-lichen files exclude ~/.zshrc       # every device again
+lichen files add ~/.zshrc shell/zshrc   # this device
+lichen files add ~/.vimrc vim/vimrc --include mac,lychee
+lichen files include ~/.zshrc lychee servers   # more devices later
+lichen files exclude ~/.zshrc lychee           # or fewer
 ```
+
+An excluded device stays out even when a group it is in is included.
 
 Skills and MCP servers work the same way, and [inserts](#inserts) use
 `if` and `unless`. A device that falls out of scope keeps its files as
 plain files and uninstalls its skills and servers.
 
 `lichen devices` lists device names (crosstalk's) and their groups. `mac`,
-`linux` and `windows` are built-in groups. Custom groups are stored in `~/lichen/lichen.toml`:
+`linux` and `windows` are built-in groups, and so is `all`, which takes
+in every device that joins later too. Custom groups are stored in
+`~/lichen/lichen.toml`:
 
 ```sh
 lichen groups add servers hetzner-1 hetzner-2
@@ -129,15 +137,15 @@ One source can have several outputs, each with its own
 [scope](#which-devices-get-what):
 
 ```sh
-lichen files add ~/.codex/AGENTS.md --to agents/CLAUDE.md
+lichen files add ~/.codex/AGENTS.md --to agents/CLAUDE.md --include mac
 lichen files add ~/.config/agents.md --to agents/CLAUDE.md --include linux
 ```
 
 Edit any of them and the others follow. `lichen files include` and
 `exclude` take a path for one output, or a source name for all of them.
 
-When a device joins with its own copy of a file that is already synced,
-the synced version replaces it. A file only you can read (`~/.netrc`,
+When a file's scope takes in a device that has its own copy, the synced
+version replaces it. A file only you can read (`~/.netrc`,
 say) is written that way everywhere.
 
 Windows marks no file as executable or as only yours to read. A script
@@ -261,14 +269,15 @@ limited skill's canonical copy lives in `~/.local/share/lichen/skills`
 instead, reachable only through the listed harnesses' links. List
 `agents` to keep it in `~/.agents/skills`.
 
-The list of skill repos lives in `~/lichen/skills.toml`, so adding a skill
-on one device installs it everywhere, and removing one uninstalls it
+The list of skill repos lives in `~/lichen/skills.toml`, so a skill
+installs on every device in its scope, and removing one uninstalls it
 everywhere. The
 daemon polls each repo about hourly, and a repo moving only reinstalls
 the skills whose content actually changed. `lichen skills update` checks
 immediately.
 
-A repo's skills can be [scoped](#which-devices-get-what):
+A repo's skills go where it is [scoped](#which-devices-get-what), and
+adding a repo again adds the device it is added on:
 
 ```sh
 lichen skills add owner/mac-skills --include mac
@@ -294,13 +303,14 @@ already use in a harness is left alone there. A lichen server deleted by
 hand comes back on the next pass, so remove it with `lichen mcp remove`
 instead. Running sessions pick up changes after a restart.
 
-The list of servers lives in `~/lichen/mcp.toml`, so adding a server on
-one device installs it everywhere, and removing one uninstalls it
-everywhere. A server can be [scoped](#which-devices-get-what):
+The list of servers lives in `~/lichen/mcp.toml`, so a server installs
+on every device in its [scope](#which-devices-get-what), and removing
+one uninstalls it everywhere. Adding a server again keeps the devices it
+had:
 
 ```sh
 lichen mcp add playwright --include mac bunx @playwright/mcp@latest
-lichen mcp include playwright mac lychee   # change it later
+lichen mcp include playwright hetzner-1   # change it later
 ```
 
 Servers that need API keys, headers or a login aren't supported.

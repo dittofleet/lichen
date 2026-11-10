@@ -55,7 +55,8 @@ func (t text) bytes() []byte {
 func binary(b []byte) bool { return bytes.IndexByte(b, 0) >= 0 }
 
 // directive parses a line starting with § (and not §§): the source it
-// inserts, and the devices it is scoped to.
+// inserts, and the devices it is scoped to: every device the file goes
+// to, the ones named by an if, or all but the ones named by an unless.
 func directive(line string) (name string, scope core.Scope, err error) {
 	rest := strings.TrimPrefix(line, mark)
 	if strings.TrimLeftFunc(rest, unicode.IsSpace) == rest {
@@ -73,7 +74,7 @@ func directive(line string) (name string, scope core.Scope, err error) {
 		return "", scope, err
 	}
 	if kw == "" {
-		return name, scope, nil
+		return name, core.Scope{Include: []string{core.All}}, nil
 	}
 	names := strings.FieldsFunc(cond, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
 	if len(names) == 0 {
@@ -87,7 +88,7 @@ func directive(line string) (name string, scope core.Scope, err error) {
 	if kw == "if" {
 		scope.Include = names
 	} else {
-		scope.Exclude = names
+		scope = core.Scope{Include: []string{core.All}, Exclude: names}
 	}
 	return name, scope, nil
 }

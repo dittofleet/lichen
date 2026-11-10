@@ -62,64 +62,66 @@ func outputAt(c *fileConfig, p string) (name string, out Output, err error) {
 }
 
 // Add starts syncing a file or directory as the source name, with an
-// output where it is, for the devices in scope.
-func Add(env *core.Env, p, name string, scope core.Scope) error {
+// output where it is, for the devices in scope, or only this one when it
+// names none, and returns the scope it gets.
+func Add(env *core.Env, p, name string, scope core.Scope) (core.Scope, error) {
+	scope = env.Adding(core.Scope{}, scope)
 	if err := validName(name); err != nil {
-		return err
+		return scope, err
 	}
 	// A backslash is part of a name on a Mac or Linux and parts two names
 	// on Windows, and a source is named the same on every device.
 	if strings.Contains(name, `\`) {
-		return fmt.Errorf(`%q is not a usable source name (its parts go between slashes, as in claude/commands)`, name)
+		return scope, fmt.Errorf(`%q is not a usable source name (its parts go between slashes, as in claude/commands)`, name)
 	}
 	c, err := loadConfig(env)
 	if err != nil {
-		return err
+		return scope, err
 	}
 	st, err := loadState()
 	if err != nil {
-		return err
+		return scope, err
 	}
 	dead, err := loadDeleted(env)
 	if err != nil {
-		return err
+		return scope, err
 	}
 	abs, err := outputPath(env, p)
 	if err != nil {
-		return err
+		return scope, err
 	}
 	fi, err := os.Lstat(abs)
 	if errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("%s doesn't exist", config.ContractHome(abs))
+		return scope, fmt.Errorf("%s doesn't exist", config.ContractHome(abs))
 	}
 	if err != nil {
-		return err
+		return scope, err
 	}
 	if fi.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("%s is a symlink: sync what it points at instead", p)
+		return scope, fmt.Errorf("%s is a symlink: sync what it points at instead", p)
 	}
 	if err := claimed(c, abs); err != nil {
-		return err
+		return scope, err
 	}
 	if _, ok := c.Sources[name]; ok {
-		return fmt.Errorf("%s is already a source: pick another name, or add an output to it with --to", name)
+		return scope, fmt.Errorf("%s is already a source: pick another name, or add an output to it with --to", name)
 	}
 	// One source inside another would have its files synced twice.
 	for e := range c.Sources {
 		if inside(name, e) || inside(e, name) {
-			return fmt.Errorf("%s would overlap the source %s: pick another name", name, e)
+			return scope, fmt.Errorf("%s would overlap the source %s: pick another name", name, e)
 		}
 	}
 	if _, err := os.Lstat(sourcePath(env, name)); err == nil {
-		return fmt.Errorf("%s/%s already exists: pick another name", SourcesDir, name)
+		return scope, fmt.Errorf("%s/%s already exists: pick another name", SourcesDir, name)
 	}
 	rels, secret := []string{""}, private(abs)
 	if fi.IsDir() {
 		if rels = listFiles(abs); len(rels) == 0 {
-			return fmt.Errorf("%s has no files to sync", p)
+			return scope, fmt.Errorf("%s has no files to sync", p)
 		}
 	} else if !fi.Mode().IsRegular() {
-		return fmt.Errorf("%s is not a file or directory", p)
+		return scope, fmt.Errorf("%s is not a file or directory", p)
 	}
 	for _, rel := range rels {
 		out, file := abs, name
@@ -128,10 +130,10 @@ func Add(env *core.Env, p, name string, scope core.Scope) error {
 		}
 		content, err := os.ReadFile(out)
 		if err != nil {
-			return err
+			return scope, err
 		}
 		if err := track(env, st, want{source: name, file: file, path: out, root: abs, dir: rel != ""}, content); err != nil {
-			return err
+			return scope, err
 		}
 		secret = secret || private(out)
 	}
@@ -144,45 +146,47 @@ func Add(env *core.Env, p, name string, scope core.Scope) error {
 		}
 	}
 	if err := c.save(env); err != nil {
-		return err
+		return scope, err
 	}
 	if err := saveDeleted(env, dead); err != nil {
-		return err
+		return scope, err
 	}
-	return st.save()
+	return scope, st.save()
 }
 
-// AddOutput gives an existing source another output. A file already
-// there is replaced by the source on the next pass. A directory there
+// AddOutput gives an existing source another output, for the devices in
+// scope, or only this one when it names none, and returns the scope it
+// gets. A file already there is replaced by the source on the next pass. A directory there
 // may only hold files the source has: any other file in it would join
 // the source, and go everywhere.
-func AddOutput(env *core.Env, source, p string, scope core.Scope) error {
+func AddOutput(env *core.Env, source, p string, scope core.Scope) (core.Scope, error) {
+	scope = env.Adding(core.Scope{}, scope)
 	c, err := loadConfig(env)
 	if err != nil {
-		return err
+		return scope, err
 	}
 	s, ok := c.Sources[source]
 	if !ok {
-		return fmt.Errorf("no source named %s (see: lichen files)", source)
+		return scope, fmt.Errorf("no source named %s (see: lichen files)", source)
 	}
 	abs, err := outputPath(env, p)
 	if err != nil {
-		return err
+		return scope, err
 	}
 	if err := claimed(c, abs); err != nil {
-		return err
+		return scope, err
 	}
 	if fi, err := os.Stat(sourcePath(env, source)); err == nil && fi.IsDir() {
 		has := listFiles(sourcePath(env, source))
 		for _, rel := range listFiles(abs) {
 			if !slices.Contains(has, rel) {
-				return fmt.Errorf("%s holds files %s doesn't have (%s): move them away first", config.ContractHome(abs), source, rel)
+				return scope, fmt.Errorf("%s holds files %s doesn't have (%s): move them away first", config.ContractHome(abs), source, rel)
 			}
 		}
 	}
 	s.To = append(s.To, Output{Path: config.ContractHome(abs), Scope: scope})
 	c.Sources[source] = s
-	return c.save(env)
+	return scope, c.save(env)
 }
 
 // Remove stops syncing: an output path stops being one of its source's
@@ -220,9 +224,9 @@ func Remove(env *core.Env, args []string) ([]string, error) {
 	return removed, c.save(env)
 }
 
-// SetScope scopes outputs to devices: one output by its path, or every
-// output of a source by its name.
-func SetScope(env *core.Env, target string, scope core.Scope) error {
+// SetScope changes the scope of outputs through edit: one output by its
+// path, or every output of a source by its name.
+func SetScope(env *core.Env, target string, edit func(core.Scope) core.Scope) error {
 	c, err := loadConfig(env)
 	if err != nil {
 		return err
@@ -238,7 +242,7 @@ func SetScope(env *core.Env, target string, scope core.Scope) error {
 	s := c.Sources[n]
 	for i := range s.To {
 		if only == "" || s.To[i].Path == only {
-			s.To[i].Scope = scope
+			s.To[i].Scope = edit(s.To[i].Scope)
 		}
 	}
 	c.Sources[n] = s

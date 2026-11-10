@@ -120,15 +120,20 @@ func (d *device) has(rel string) bool {
 	return err == nil
 }
 
-// add syncs ~/rel as the source rel names without its leading dots.
+// add syncs ~/rel as the source rel names without its leading dots, to
+// the devices and groups named, or all of them.
 func (d *device) add(rel string, include ...string) {
 	d.t.Helper()
+	if len(include) == 0 {
+		include = []string{core.All}
+	}
 	parts := strings.Split(rel, "/")
 	for i, p := range parts {
 		parts[i] = strings.TrimLeft(p, ".")
 	}
 	d.change(func(env *core.Env) error {
-		return files.Add(env, "~/"+rel, strings.Join(parts, "/"), core.Scope{Include: include})
+		_, err := files.Add(env, "~/"+rel, strings.Join(parts, "/"), core.Scope{Include: include})
+		return err
 	})
 }
 
@@ -259,26 +264,100 @@ func TestScopes(t *testing.T) {
 	if b.has(".zshrc") {
 		t.Fatal("banana got a file scoped to apple")
 	}
+	scope := func(target string, edit func(env *core.Env, s core.Scope) core.Scope) {
+		t.Helper()
+		a.change(func(env *core.Env) error {
+			return files.SetScope(env, target, func(s core.Scope) core.Scope { return edit(env, s) })
+		})
+	}
 
 	// A custom group brings banana in.
-	a.change(func(env *core.Env) error {
-		return files.SetScope(env, "~/.zshrc", core.Scope{Include: []string{"apple", "fruit"}})
-	})
+	scope("~/.zshrc", func(_ *core.Env, s core.Scope) core.Scope { return s.With("fruit") })
 	a.change(func(env *core.Env) error { return env.EditGroup(true, "fruit", []string{"banana"}) })
 	b.sync()
 	expect(t, b, ".zshrc", "apple only\n")
 
 	// Scoping banana out again leaves its copy, no longer synced.
 	a.sync()
-	a.change(func(env *core.Env) error { return files.SetScope(env, "zshrc", core.Scope{Include: []string{"apple"}}) })
+	scope("zshrc", func(env *core.Env, s core.Scope) core.Scope { return env.Settings.Without(s, "banana") })
+	b.sync()
+	expect(t, b, ".zshrc", "apple only\n")
+	a.write(".zshrc", "apple again\n")
+	a.sync()
 	b.sync()
 	expect(t, b, ".zshrc", "apple only\n")
 
-	// Excluding apple sends it everywhere else instead.
-	os.Remove(b.path(".zshrc"))
-	a.change(func(env *core.Env) error { return files.SetScope(env, "zshrc", core.Scope{Exclude: []string{"apple"}}) })
+	// Taking apple out too leaves it on no device, and both keep theirs.
+	scope("zshrc", func(env *core.Env, s core.Scope) core.Scope { return env.Settings.Without(s, "apple", "fruit") })
+	a.write(".zshrc", "apple alone\n")
+	a.sync()
 	b.sync()
 	expect(t, b, ".zshrc", "apple only\n")
+	if got := a.read("lichen/files/zshrc"); got != "apple again\n" {
+		t.Fatalf("source = %q after an edit on no device", got)
+	}
+
+	// all is every device but the ones excluded, and brings banana's
+	// copy back in line.
+	scope("zshrc", func(env *core.Env, s core.Scope) core.Scope { return env.Settings.Without(s.With(core.All), "apple") })
+	b.sync()
+	expect(t, b, ".zshrc", "apple again\n")
+	expect(t, a, ".zshrc", "apple alone\n")
+}
+
+// TestOptIn: something added goes only to the device it was added on,
+// a device that joins gets nothing it isn't named for, and an entry
+// with no scope (as written before scopes were opt-in) goes nowhere and
+// leaves every copy alone.
+func TestOptIn(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write(".zshrc", "apple\n")
+	a.change(func(env *core.Env) error {
+		_, err := files.Add(env, "~/.zshrc", "zshrc", core.Scope{})
+		return err
+	})
+	a.write(".vimrc", "set nu\n")
+	a.add(".vimrc")
+
+	b := freshDevice(t, "banana")
+	b.write(".zshrc", "banana's own\n")
+	b.write(".vimrc", "banana's vim\n")
+	b.setup(remote)
+	expect(t, b, ".zshrc", "banana's own\n")
+	expect(t, b, ".vimrc", "set nu\n")
+
+	a.change(func(env *core.Env) error {
+		return files.SetScope(env, "zshrc", func(s core.Scope) core.Scope { return s.With("banana") })
+	})
+	b.sync()
+	expect(t, b, ".zshrc", "apple\n")
+
+	// files.toml with its scopes taken out.
+	a.sync()
+	p := a.path("lichen/files.toml")
+	raw, _ := os.ReadFile(p)
+	var kept []string
+	for _, l := range strings.Split(string(raw), "\n") {
+		if !strings.HasPrefix(l, "include") {
+			kept = append(kept, l)
+		}
+	}
+	a.write("lichen/files.toml", strings.Join(kept, "\n"))
+	a.sync()
+	b.sync()
+	a.write(".zshrc", "apple edits\n")
+	b.write(".vimrc", "banana edits\n")
+	a.sync()
+	b.sync()
+	a.sync()
+	expect(t, a, ".zshrc", "apple edits\n")
+	expect(t, a, ".vimrc", "set nu\n")
+	expect(t, b, ".zshrc", "apple\n")
+	expect(t, b, ".vimrc", "banana edits\n")
+	if got := a.read("lichen/files/zshrc"); got != "apple\n" {
+		t.Fatalf("zshrc source = %q", got)
+	}
 }
 
 func TestSeveralOutputs(t *testing.T) {
@@ -287,7 +366,8 @@ func TestSeveralOutputs(t *testing.T) {
 	a.write(".claude/CLAUDE.md", "be brief\n")
 	a.add(".claude/CLAUDE.md")
 	a.change(func(env *core.Env) error {
-		return files.AddOutput(env, "claude/CLAUDE.md", "~/.codex/AGENTS.md", core.Scope{})
+		_, err := files.AddOutput(env, "claude/CLAUDE.md", "~/.codex/AGENTS.md", core.Scope{})
+		return err
 	})
 	expect(t, a, ".codex/AGENTS.md", "be brief\n")
 
@@ -421,12 +501,16 @@ func TestOutputsOutsideHomeAreIgnored(t *testing.T) {
 	t.Cleanup(func() { os.Remove(outside) })
 	a.write("lichen/files.toml", `["~/.zshrc"]
 source = "zshrc"
+include = ["all"]
 ["~/../`+filepath.Base(outside)+`"]
 source = "zshrc"
+include = ["all"]
 ["~/lichen/zshrc"]
 source = "zshrc"
+include = ["all"]
 ["relative/zshrc"]
 source = "zshrc"
+include = ["all"]
 `)
 	a.sync()
 	expect(t, a, ".zshrc", "z\n")
@@ -447,6 +531,17 @@ func TestOutputsNeedASource(t *testing.T) {
 	}
 }
 
+// An output excluded from devices but included on none is refused, as
+// "every device but" was written before scopes were opt-in.
+func TestExcludeNeedsInclude(t *testing.T) {
+	remote := newRemote(t)
+	a := newDevice(t, remote, "apple")
+	a.write("lichen/files.toml", "[\"~/.zshrc\"]\nsource = \"zshrc\"\nexclude = [\"servers\"]\n")
+	if err := module.Pass(a.env(), false); err == nil || !strings.Contains(err.Error(), "exclude needs include") {
+		t.Fatalf("pass = %v, want an error for the exclude", err)
+	}
+}
+
 // An edit made in the sync folder directly is committed under its path.
 func TestDirectEditsAreDescribed(t *testing.T) {
 	remote := newRemote(t)
@@ -462,27 +557,6 @@ func TestDirectEditsAreDescribed(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(out)); got != "lichen(apple): edit files/zshrc" {
 		t.Fatalf("commit subject = %q", got)
-	}
-}
-
-func TestDeviceGroups(t *testing.T) {
-	d := core.Device{Name: "lychee", Groups: []string{"mac", "servers"}}
-	for _, c := range []struct {
-		scope core.Scope
-		want  bool
-	}{
-		{core.Scope{}, true},
-		{core.Scope{Include: []string{"mac"}}, true},
-		{core.Scope{Include: []string{"linux"}}, false},
-		{core.Scope{Include: []string{"linux", "servers"}}, true},
-		{core.Scope{Include: []string{"lychee"}}, true},
-		{core.Scope{Exclude: []string{"lychee"}}, false},
-		{core.Scope{Exclude: []string{"servers"}}, false},
-		{core.Scope{Exclude: []string{"linux", "hetzner"}}, true},
-	} {
-		if got := d.In(c.scope); got != c.want {
-			t.Errorf("In(%+v) = %v, want %v", c.scope, got, c.want)
-		}
 	}
 }
 
@@ -524,7 +598,8 @@ func TestDeletingOneOutputDeletesTheSource(t *testing.T) {
 	a.write(".claude/CLAUDE.md", "x\n")
 	a.add(".claude/CLAUDE.md")
 	a.change(func(env *core.Env) error {
-		return files.AddOutput(env, "claude/CLAUDE.md", "~/.codex/AGENTS.md", core.Scope{})
+		_, err := files.AddOutput(env, "claude/CLAUDE.md", "~/.codex/AGENTS.md", core.Scope{Include: []string{core.All}})
+		return err
 	})
 	b := newDevice(t, remote, "banana")
 
@@ -639,7 +714,7 @@ func TestOverlappingAddsAreRefused(t *testing.T) {
 	a.add(".claude/commands")
 	env := a.env()
 	for _, p := range []string{"~/.claude/commands/one.md", "~/.claude", "~/lichen/files.toml"} {
-		if err := files.Add(env, p, "x", core.Scope{}); err == nil {
+		if _, err := files.Add(env, p, "x", core.Scope{}); err == nil {
 			t.Errorf("adding %s: expected a refusal", p)
 		}
 	}
@@ -655,14 +730,14 @@ func TestOverlappingAddsAreRefused(t *testing.T) {
 		{"~/claude/notes.md", "", "not a usable source name"},
 		{"~/claude/notes.md", `claude\notes`, "not a usable source name"},
 	} {
-		if err := files.Add(env, tc.path, tc.name, core.Scope{}); err == nil || !strings.Contains(err.Error(), tc.err) {
+		if _, err := files.Add(env, tc.path, tc.name, core.Scope{}); err == nil || !strings.Contains(err.Error(), tc.err) {
 			t.Errorf("adding %s as %q: %v, want an error saying %q", tc.path, tc.name, err, tc.err)
 		}
 	}
 
 	// A directory output may not bring files of its own along.
 	a.write(".codex/prompts/mine.md", "m")
-	if err := files.AddOutput(env, "claude/commands", "~/.codex/prompts", core.Scope{}); err == nil {
+	if _, err := files.AddOutput(env, "claude/commands", "~/.codex/prompts", core.Scope{}); err == nil {
 		t.Error("adding an output over a directory with other files: expected a refusal")
 	}
 }
@@ -713,7 +788,10 @@ func TestSourceKeptOverADeletionStaysRemovable(t *testing.T) {
 
 	os.Rename(remote, remote+".away")
 	b.write(".zshrc", "edited on banana\n")
-	b.change(func(env *core.Env) error { return files.AddOutput(env, "zshrc", "~/.zshrc.local", core.Scope{}) })
+	b.change(func(env *core.Env) error {
+		_, err := files.AddOutput(env, "zshrc", "~/.zshrc.local", core.Scope{Include: []string{core.All}})
+		return err
+	})
 	os.Rename(remote+".away", remote)
 	os.Remove(a.path(".zshrc"))
 	a.sync()

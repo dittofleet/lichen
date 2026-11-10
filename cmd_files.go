@@ -79,12 +79,16 @@ func cmdFilesAdd(args []string) error {
 			pos = append(pos, a)
 		}
 	}
+	if err := scope.Check(); err != nil {
+		return err
+	}
 	if to != "" {
 		if len(pos) != 1 {
 			return usage("files", "add")
 		}
-		if err := change(fmt.Sprintf("write %s to %s", to, tilde(pos[0])), func(env *core.Env) error {
-			return files.AddOutput(env, to, pos[0], scope)
+		if err := change(fmt.Sprintf("write %s to %s", to, tilde(pos[0])), func(env *core.Env) (err error) {
+			scope, err = files.AddOutput(env, to, pos[0], scope)
+			return err
 		}); err != nil {
 			return err
 		}
@@ -96,9 +100,10 @@ func cmdFilesAdd(args []string) error {
 	}
 	p, name := pos[0], pos[1]
 	var at string
-	if err := change("add "+tilde(p), func(env *core.Env) error {
+	if err := change("add "+tilde(p), func(env *core.Env) (err error) {
 		at = config.ContractHome(env.Path(files.SourcesDir, name))
-		return files.Add(env, p, name, scope)
+		scope, err = files.Add(env, p, name, scope)
+		return err
 	}); err != nil {
 		return err
 	}
@@ -163,11 +168,10 @@ func cmdFilesList() error {
 				name = ""
 			}
 			line := fmt.Sprintf("%-*s  %s", width, name, o.Path)
-			switch {
-			case !env.Device.In(o.Scope):
-				line = notHere(line, o.Scope)
-			case !o.Scope.Everywhere():
+			if env.Device.In(o.Scope) {
 				line += "  " + dim("("+core.Describe(o.Scope)+")")
+			} else {
+				line = notHere(line, o.Scope)
 			}
 			fmt.Println(line)
 		}

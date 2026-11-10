@@ -20,7 +20,9 @@ func cmdSkills(args []string) error {
 	case "remove", "rm":
 		return cmdSkillsRemove(args[1:])
 	case "include", "exclude":
-		return cmdScope("skills", args, func(_ *core.Env, repo string, scope core.Scope) error { return skills.SetScope(repo, scope) })
+		return cmdScope("skills", args, func(_ *core.Env, repo string, edit func(core.Scope) core.Scope) error {
+			return skills.SetScope(repo, edit)
+		})
 	case "update":
 		return cmdSkillsUpdate()
 	case "list", "ls":
@@ -61,10 +63,13 @@ func cmdSkillsAdd(args []string) error {
 	if repo == "" {
 		return usage("skills", "add")
 	}
+	if err := scope.Check(); err != nil {
+		return err
+	}
 	var src skills.Source
 	var here bool
 	err := change("skills: add "+repo, func(env *core.Env) (err error) {
-		src, err = skills.AddSource(repo, names, scope, env.Log)
+		src, err = skills.AddSource(env, repo, names, scope)
 		here = env.Device.In(src.Scope)
 		return err
 	})
@@ -170,7 +175,9 @@ func cmdMCP(args []string) error {
 	case "remove", "rm":
 		return cmdMCPRemove(args[1:])
 	case "include", "exclude":
-		return cmdScope("mcp", args, func(_ *core.Env, name string, scope core.Scope) error { return mcp.SetScope(name, scope) })
+		return cmdScope("mcp", args, func(_ *core.Env, name string, edit func(core.Scope) core.Scope) error {
+			return mcp.SetScope(name, edit)
+		})
 	case "list", "ls":
 		return cmdMCPList()
 	}
@@ -194,6 +201,9 @@ func cmdMCPAdd(args []string) error {
 		}
 		rest = rest[2:]
 	}
+	if err := scope.Check(); err != nil {
+		return err
+	}
 	// A `--` before the command is what `claude mcp add` and `codex mcp
 	// add` expect, so tolerate it out of habit.
 	if len(rest) > 0 && rest[0] == "--" {
@@ -211,15 +221,16 @@ func cmdMCPAdd(args []string) error {
 	}
 	s.Scope = scope
 	var here bool
-	err := change("mcp: add "+name, func(env *core.Env) error {
-		here = env.Device.In(scope)
-		return mcp.AddServer(name, s)
+	err := change("mcp: add "+name, func(env *core.Env) (err error) {
+		s, err = mcp.AddServer(env, name, s)
+		here = env.Device.In(s.Scope)
+		return err
 	})
 	if err != nil {
 		return err
 	}
 	if !here {
-		fmt.Printf("syncing %s on %s, so not here\n", name, core.Describe(scope))
+		fmt.Printf("syncing %s on %s, so not here\n", name, core.Describe(s.Scope))
 		return nil
 	}
 	entries, err := mcp.List()
@@ -278,9 +289,7 @@ func cmdMCPList() error {
 		if len(e.Harnesses) > 0 {
 			where = strings.Join(e.Harnesses, ", ")
 		}
-		if !e.Server.Scope.Everywhere() {
-			where = core.Describe(e.Server.Scope) + ": " + where
-		}
+		where = core.Describe(e.Server.Scope) + ": " + where
 		fmt.Println(line + "  " + dim("("+where+")"))
 	}
 	return nil
