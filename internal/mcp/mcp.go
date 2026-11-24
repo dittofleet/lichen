@@ -1,14 +1,14 @@
-// Package mcp is lichen's mcp module: it installs MCP servers into every
-// supported harness (Claude Code, Codex and Antigravity) through each harness's own
-// `mcp add` and `mcp remove` commands, so the harness stays the only
-// writer of its config file. A server is just a name and either a
-// command to launch or a URL to reach: no env vars, headers or auth, so
-// nothing secret ever enters the synced config. WHICH servers to install
-// lives in this module's own config file (mcp.toml in the sync folder).
-// What this machine installed where lives in a local manifest, the
-// ownership boundary:
-// lichen only ever replaces or removes servers it added itself, so
-// servers added by other means always coexist with lichen's.
+// Package mcp is lichen's mcp module: it installs MCP servers into the
+// harnesses each one names (Claude Code, Codex, Antigravity) through
+// each harness's own `mcp add` and `mcp remove` commands, so the harness
+// stays the only writer of its config file. A server is just a name and
+// either a command to launch or a URL to reach: no env vars, headers or
+// auth, so nothing secret ever enters the synced config. WHICH servers
+// to install lives in this module's own config file (mcp.toml in the
+// sync folder). What this machine installed where lives in a local
+// manifest, the ownership boundary: lichen only ever replaces or removes
+// servers it added itself, so servers added by other means always
+// coexist with lichen's.
 package mcp
 
 import (
@@ -38,12 +38,23 @@ func (Module) Config() string { return ConfigFile }
 func (Module) Reconcile(env *core.Env) error { return Reconcile(env) }
 
 // Server is one MCP server: a local one lichen launches through Command
-// and Args, or a remote one reachable at URL.
+// and Args, or a remote one reachable at URL. It goes into the harnesses
+// it names, and nowhere when it names none.
 type Server struct {
-	Command string   `toml:"command,omitempty" json:"command,omitempty"`
-	Args    []string `toml:"args,omitempty" json:"args,omitempty"`
-	URL     string   `toml:"url,omitempty" json:"url,omitempty"`
+	Command   string   `toml:"command,omitempty" json:"command,omitempty"`
+	Args      []string `toml:"args,omitempty" json:"args,omitempty"`
+	URL       string   `toml:"url,omitempty" json:"url,omitempty"`
+	Harnesses []string `toml:"harnesses,omitempty" json:"harnesses,omitempty"`
 	core.Scope
+}
+
+// HarnessNames lists what a server can name as its harnesses.
+func HarnessNames() []string {
+	var names []string
+	for _, h := range harnesses {
+		names = append(names, h.name())
+	}
+	return names
 }
 
 // equal reports whether two servers run the same thing, wherever they
@@ -82,6 +93,9 @@ func validate(name string, s Server) error {
 		return fmt.Errorf("%s has neither a url nor a command", name)
 	case strings.HasPrefix(s.Command, "-"):
 		return fmt.Errorf("%s command %q looks like a flag", name, s.Command)
+	}
+	if _, err := core.PickHarnesses(HarnessNames(), s.Harnesses); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
 	}
 	return nil
 }
@@ -177,9 +191,9 @@ var missingLogged = map[string]bool{}
 
 // Reconcile makes every available harness's lichen-installed servers
 // match the mcp config: add what's missing, replace what changed, and
-// remove what the config no longer lists for this device. A server that
-// fails in one harness is logged and retried on the next pass, never
-// blocking the rest.
+// remove what the config no longer lists for this device and harness. A
+// server that fails in one harness is logged and retried on the next
+// pass, never blocking the rest.
 func Reconcile(env *core.Env) error {
 	lg := env.Log
 	cfg, exists, err := loadConfig()
@@ -204,19 +218,30 @@ func Reconcile(env *core.Env) error {
 	}
 
 	desired := map[string]Server{}
+	// A hand-edited entry this build rejects keeps whatever lichen
+	// installed under its name, rather than reading as a removal.
+	rejected := map[string]bool{}
 	for _, name := range slices.Sorted(maps.Keys(cfg.Servers)) {
 		if err := validate(name, cfg.Servers[name]); err != nil {
 			lg.Printf("mcp: %v", err)
+			rejected[name] = true
 			continue
 		}
 		desired[name] = cfg.Servers[name]
 	}
 
 	for _, h := range harnesses {
+		// What this harness is to have: the servers that name it.
+		wanted := map[string]Server{}
+		for name, s := range desired {
+			if slices.Contains(s.Harnesses, h.name()) {
+				wanted[name] = s
+			}
+		}
 		if !h.available() {
 			// Once per process: a machine without this harness would
 			// otherwise repeat it on every daemon pass.
-			if len(desired) > 0 && !missingLogged[h.name()] {
+			if len(wanted) > 0 && !missingLogged[h.name()] {
 				missingLogged[h.name()] = true
 				lg.Printf("mcp: %s not found on PATH, skipping it", h.name())
 			}
@@ -227,8 +252,8 @@ func Reconcile(env *core.Env) error {
 			lg.Printf("mcp: listing %s's servers: %v (skipping it this pass)", h.name(), err)
 			continue
 		}
-		for _, name := range slices.Sorted(maps.Keys(desired)) {
-			want := desired[name]
+		for _, name := range slices.Sorted(maps.Keys(wanted)) {
+			want := wanted[name]
 			prev, owned := man.Servers[name][h.name()]
 			verb := "installed"
 			switch {
@@ -272,9 +297,7 @@ func Reconcile(env *core.Env) error {
 			if _, owned := man.Servers[name][h.name()]; !owned {
 				continue
 			}
-			// A hand-edited entry this build rejects keeps whatever lichen
-			// installed under its name, rather than reading as a removal.
-			if _, ok := cfg.Servers[name]; ok {
+			if _, ok := wanted[name]; ok || rejected[name] {
 				continue
 			}
 			// Already gone by hand: nothing to remove.
@@ -298,9 +321,10 @@ func Reconcile(env *core.Env) error {
 
 // AddServer records a server in the mcp config, for the devices s's
 // scope names, or only here when it names none, and returns it as saved.
-// A server of the same name is replaced, keeping its devices too (see
-// core.Env.Adding). Install happens on the next reconcile, which the
-// CLI runs immediately after.
+// A server of the same name is replaced, keeping its devices and
+// harnesses too (see core.Env.Adding), but one with no harnesses has to
+// name some: nothing goes anywhere it wasn't asked to. Install happens
+// on the next reconcile, which the CLI runs immediately after.
 func AddServer(env *core.Env, name string, s Server) (Server, error) {
 	if err := validate(name, s); err != nil {
 		return s, err
@@ -309,13 +333,32 @@ func AddServer(env *core.Env, name string, s Server) (Server, error) {
 	if err != nil {
 		return s, err
 	}
-	s.Scope = env.Adding(cfg.Servers[name].Scope, s.Scope)
+	old := cfg.Servers[name]
+	if s.Harnesses, err = core.AddingHarnesses(HarnessNames(), old.Harnesses, s.Harnesses, name); err != nil {
+		return s, err
+	}
+	s.Scope = env.Adding(old.Scope, s.Scope)
 	cfg.Servers[name] = s
 	return s, saveServers(cfg.Servers)
 }
 
 // SetScope changes the scope of a server through edit.
 func SetScope(name string, edit func(core.Scope) core.Scope) error {
+	return editServer(name, func(s *Server) { s.Scope = edit(s.Scope) })
+}
+
+// SetHarnesses changes the harnesses a server goes into to exactly
+// these, and returns them as saved.
+func SetHarnesses(name string, harnesses []string) ([]string, error) {
+	harnesses, err := core.PickHarnesses(HarnessNames(), harnesses)
+	if err != nil {
+		return nil, err
+	}
+	return harnesses, editServer(name, func(s *Server) { s.Harnesses = harnesses })
+}
+
+// editServer changes a server in the mcp config through edit.
+func editServer(name string, edit func(*Server)) error {
 	cfg, _, err := loadConfig()
 	if err != nil {
 		return err
@@ -324,7 +367,7 @@ func SetScope(name string, edit func(core.Scope) core.Scope) error {
 	if !ok {
 		return fmt.Errorf("%q is not a synced MCP server (see: lichen mcp list)", name)
 	}
-	s.Scope = edit(s.Scope)
+	edit(&s)
 	cfg.Servers[name] = s
 	return saveServers(cfg.Servers)
 }

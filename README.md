@@ -285,31 +285,44 @@ lichen skills harness owner/mac-skills claude codex    # or where it goes
 
 ## MCP servers
 
-The mcp module installs MCP servers into Claude Code, Codex and
-Antigravity, from a command to launch or a URL to reach:
+The mcp module installs MCP servers, from a command to launch or a URL
+to reach, into the harnesses you name: `claude` (Claude Code), `codex`
+and `antigravity`.
 
 ```sh
-lichen mcp add playwright bunx @playwright/mcp@latest
-lichen mcp add context7 https://mcp.context7.com/mcp
+lichen mcp add playwright --harness claude,codex bunx @playwright/mcp@latest
+lichen mcp add context7 --harness claude https://mcp.context7.com/mcp
 lichen mcp remove context7
 lichen mcp list
 ```
 
-Servers go in at user scope through each harness's own CLI (`claude mcp`,
-`codex mcp` and `agy mcp`), and a harness that isn't installed on a
-machine is skipped. lichen never touches a server it didn't add, so a name you
-already use in a harness is left alone there. A lichen server deleted by
-hand comes back on the next pass, so remove it with `lichen mcp remove`
-instead. Running sessions pick up changes after a restart.
+Nothing goes into a harness that isn't named, so a new server needs
+`--harness`. Servers go in at user scope through each harness's own CLI
+(`claude mcp`, `codex mcp` and `agy mcp`), and a harness that isn't
+installed on a machine is skipped. lichen never touches a server it
+didn't add, so a name you already use in a harness is left alone there.
+A lichen server deleted by hand comes back on the next pass, so remove
+it with `lichen mcp remove` instead. Running sessions pick up changes
+after a restart.
 
 The list of servers lives in `~/lichen/mcp.toml`, so a server installs
 on every device in its [scope](#which-devices-get-what), and removing
-one uninstalls it everywhere. Adding a server again keeps the devices it
-had:
+one uninstalls it everywhere:
+
+```toml
+[playwright]
+command = "bunx"
+args = ["@playwright/mcp@latest"]
+harnesses = ["claude", "codex"]
+include = ["mac"]
+```
+
+Adding a server again keeps the devices and harnesses it had:
 
 ```sh
-lichen mcp add playwright --include mac bunx @playwright/mcp@latest
-lichen mcp include playwright hetzner-1   # change it later
+lichen mcp add playwright --harness claude --include mac bunx @playwright/mcp@latest
+lichen mcp include playwright hetzner-1        # change it later
+lichen mcp harness playwright claude codex     # or where it goes
 ```
 
 Servers that need API keys, headers or a login aren't supported.

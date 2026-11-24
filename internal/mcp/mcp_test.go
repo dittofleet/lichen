@@ -99,12 +99,20 @@ func TestReconcile(t *testing.T) {
 		}
 	}
 
-	pw := Server{Command: "bunx", Args: []string{"@playwright/mcp@latest"}}
+	both := []string{"claude", "codex"}
+	pw := Server{Command: "bunx", Args: []string{"@playwright/mcp@latest"}, Harnesses: both}
 	if _, err := AddServer(env, "pw", pw); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := AddServer(env, "mine", Server{URL: "https://example.com/mcp"}); err != nil {
+	if _, err := AddServer(env, "mine", Server{URL: "https://example.com/mcp", Harnesses: both}); err != nil {
 		t.Fatal(err)
+	}
+	// A new server has to name its harnesses, and ones lichen knows.
+	if _, err := AddServer(env, "new", Server{Command: "x"}); err == nil || !strings.Contains(err.Error(), "--harness") {
+		t.Errorf("adding a server without harnesses: %v", err)
+	}
+	if _, err := AddServer(env, "new", Server{Command: "x", Harnesses: []string{"cursor"}}); err == nil || !strings.Contains(err.Error(), "unknown harness") {
+		t.Errorf("adding an unknown harness: %v", err)
 	}
 	reconcile()
 	expect(claude, "add pw") // its own "mine" is left alone
@@ -181,6 +189,35 @@ func TestReconcile(t *testing.T) {
 	reconcile()
 	expect(claude)
 	expect(codex)
+
+	// A server goes only into the harnesses it names, and a changed
+	// list moves it. Adding it again keeps them, and gains the named.
+	harness := func(names ...string) {
+		t.Helper()
+		if _, err := SetHarnesses("pw", names); err != nil {
+			t.Fatal(err)
+		}
+		reconcile()
+	}
+	harness("claude")
+	expect(claude)
+	expect(codex, "remove pw")
+	if s, err := AddServer(env, "pw", Server{Command: pw.Command, Args: pw.Args, Harnesses: []string{"codex"}}); err != nil || !slices.Equal(s.Harnesses, both) {
+		t.Fatalf("re-added: %v %v", s.Harnesses, err)
+	}
+	reconcile()
+	expect(claude)
+	expect(codex, "add pw")
+	if _, err := SetHarnesses("pw", []string{"cursor"}); err == nil {
+		t.Error("an unknown harness passed")
+	}
+	// One that names none goes nowhere.
+	harness()
+	expect(claude, "remove pw")
+	expect(codex, "remove pw")
+	harness(both...)
+	expect(claude, "add pw")
+	expect(codex, "add pw")
 
 	// A harness that is missing on this machine is skipped, and what
 	// lichen installed there earlier is left as is.

@@ -91,18 +91,6 @@ func HarnessNames() []string {
 	return append(names, universal)
 }
 
-// normalizeHarnesses checks that every name is a harness, and returns
-// them in HarnessNames order, each once.
-func normalizeHarnesses(names []string) ([]string, error) {
-	all := HarnessNames()
-	for _, n := range names {
-		if !slices.Contains(all, n) {
-			return nil, fmt.Errorf("unknown harness %q (there are %s)", n, strings.Join(all, ", "))
-		}
-	}
-	return slices.DeleteFunc(all, func(n string) bool { return !slices.Contains(names, n) }), nil
-}
-
 // linkDirs is where a skill for these harnesses is linked from: their
 // skills dirs, but for those that already read its universal copy.
 func linkDirs(names []string) ([]string, error) {
@@ -159,7 +147,7 @@ func loadConfig() (sources []Source, exists bool, err error) {
 				err = src.Check()
 			}
 			if err == nil {
-				_, err = normalizeHarnesses(src.Harnesses)
+				_, err = core.PickHarnesses(HarnessNames(), src.Harnesses)
 			}
 			if err != nil {
 				return fmt.Errorf("%s: %w", key, err)
@@ -824,11 +812,8 @@ func AddSource(env *core.Env, spec string, names, harnesses []string, scope core
 		src.Skills = slices.Compact(slices.Sorted(slices.Values(append(src.Skills, names...))))
 	}
 	src := &sources[idx]
-	if src.Harnesses, err = normalizeHarnesses(append(src.Harnesses, harnesses...)); err != nil {
+	if src.Harnesses, err = core.AddingHarnesses(HarnessNames(), src.Harnesses, harnesses, key); err != nil {
 		return Source{}, err
-	}
-	if len(src.Harnesses) == 0 {
-		return Source{}, fmt.Errorf("name the harnesses %s goes into with --harness (%s)", key, strings.Join(HarnessNames(), ", "))
 	}
 	if err := hasSkills(key, url, names, env.Log); err != nil {
 		return Source{}, err
@@ -872,7 +857,7 @@ func SetScope(spec string, edit func(core.Scope) core.Scope) error {
 // SetHarnesses changes the harnesses a repo's skills go into to exactly
 // these, and returns them as saved.
 func SetHarnesses(spec string, harnesses []string) ([]string, error) {
-	harnesses, err := normalizeHarnesses(harnesses)
+	harnesses, err := core.PickHarnesses(HarnessNames(), harnesses)
 	if err != nil {
 		return nil, err
 	}
