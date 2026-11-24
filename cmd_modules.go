@@ -23,6 +23,8 @@ func cmdSkills(args []string) error {
 		return cmdScope("skills", args, func(_ *core.Env, repo string, edit func(core.Scope) core.Scope) error {
 			return skills.SetScope(repo, edit)
 		})
+	case "harness":
+		return cmdSkillsHarness(args[1:])
 	case "update":
 		return cmdSkillsUpdate()
 	case "list", "ls":
@@ -36,7 +38,7 @@ func cmdSkills(args []string) error {
 
 func cmdSkillsAdd(args []string) error {
 	var repo string
-	var names []string
+	var names, harnesses []string
 	var scope core.Scope
 	for i := 0; i < len(args); i++ {
 		switch {
@@ -45,6 +47,13 @@ func cmdSkillsAdd(args []string) error {
 				return fmt.Errorf("--skill needs a name")
 			}
 			names = append(names, args[i])
+		case args[i] == "--harness":
+			if i++; i >= len(args) {
+				return fmt.Errorf("--harness needs harnesses (%s)", strings.Join(skills.HarnessNames(), ", "))
+			}
+			for _, h := range strings.Split(args[i], ",") {
+				harnesses = append(harnesses, strings.TrimSpace(h))
+			}
 		case args[i] == "--include" || args[i] == "--exclude":
 			if i++; i >= len(args) {
 				return fmt.Errorf("%s needs devices or groups", args[i-1])
@@ -69,7 +78,7 @@ func cmdSkillsAdd(args []string) error {
 	var src skills.Source
 	var here bool
 	err := change("skills: add "+repo, func(env *core.Env) (err error) {
-		src, err = skills.AddSource(env, repo, names, scope)
+		src, err = skills.AddSource(env, repo, names, harnesses, scope)
 		here = env.Device.In(src.Scope)
 		return err
 	})
@@ -94,7 +103,23 @@ func cmdSkillsAdd(args []string) error {
 		fmt.Printf("no skills installed from %s (see messages above)\n", src.Repo)
 		return nil
 	}
-	fmt.Printf("syncing %d skill(s) from %s: %s\n", len(mine), src.Repo, strings.Join(mine, ", "))
+	fmt.Printf("syncing %d skill(s) from %s into %s: %s\n", len(mine), src.Repo, strings.Join(src.Harnesses, ", "), strings.Join(mine, ", "))
+	return nil
+}
+
+func cmdSkillsHarness(args []string) error {
+	if len(args) < 2 {
+		return usage("skills", "harness")
+	}
+	repo, harnesses := args[0], args[1:]
+	err := change("skills: harness "+repo, func(*core.Env) (err error) {
+		harnesses, err = skills.SetHarnesses(repo, harnesses)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s now goes into %s\n", repo, strings.Join(harnesses, ", "))
 	return nil
 }
 
@@ -141,12 +166,16 @@ func cmdSkillsList() error {
 	for _, s := range installed {
 		width = max(width, len(s.Name))
 	}
+	into := map[string]string{}
+	for _, src := range configured {
+		into[src.Repo] = strings.Join(src.Harnesses, ", ")
+	}
 	fromRepo := map[string]bool{}
 	for _, s := range installed {
 		fromRepo[s.Repo] = true
 		repo := s.Repo
-		if len(s.OnlyFor) > 0 {
-			repo += " (" + strings.Join(s.OnlyFor, ", ") + " only)"
+		if into[repo] != "" {
+			repo += "  (" + into[repo] + ")"
 		}
 		fmt.Printf("%-*s  %s\n", width, s.Name, dim(repo))
 	}
@@ -155,6 +184,8 @@ func cmdSkillsList() error {
 		case fromRepo[src.Repo]:
 		case !env.Device.In(src.Scope):
 			fmt.Println(notHere(src.Repo, src.Scope))
+		case len(src.Harnesses) == 0:
+			fmt.Println(dim(src.Repo + "  (no harnesses, see: lichen skills harness)"))
 		default:
 			// Nothing installed yet: a fresh machine before its first
 			// pass, or a repo that failed to clone.

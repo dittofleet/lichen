@@ -1,14 +1,14 @@
 // Package skills is lichen's skills module: it installs agent skills
 // (SKILL.md directories, the format the Vercel skills CLI popularized)
 // from public git repos and keeps them fresh by polling upstream. The
-// canonical copy of a skill lives in the universal ~/.agents/skills/<name>,
-// and each harness that doesn't read that dir sees it through a symlink in
-// its own (Claude Code's ~/.claude/skills/<name>), matching the skills
-// CLI's own layout. A skill limited to some harnesses
-// (metadata.lichen-harnesses) lives in lichen's private store instead,
-// linked from those harnesses' own dirs. WHICH repos to sync lives in this
-// module's own config file (skills.toml in the sync folder). Clones and install
-// bookkeeping stay machine-local. Only skills recorded in the local manifest are ever
+// canonical copy of a skill lives in lichen's private store, and each
+// harness its repo names sees it through a symlink in its own skills dir
+// (~/.claude/skills/<name>, ~/.codex/skills/<name>, ...). A repo that
+// names "universal" has its skills in ~/.agents/skills instead, the
+// shared dir some harnesses read directly. WHICH repos to sync, and into
+// which harnesses, lives in this module's own config file (skills.toml
+// in the sync folder). Clones and install bookkeeping stay
+// machine-local. Only skills recorded in the local manifest are ever
 // touched, so skills installed by other means (npx skills, a manual
 // copy) always coexist with lichen's.
 package skills
@@ -62,7 +62,8 @@ func agentsSkillsDir() (string, error) {
 	return config.HomeJoin(".agents", "skills")
 }
 
-// harness is an agent tool a skill can be limited to, by name.
+// harness is an agent tool a source can name, to have its skills linked
+// from the tool's own skills dir.
 type harness struct {
 	name string
 	dir  []string // its own skills dir, under home
@@ -77,26 +78,40 @@ var harnesses = []harness{
 	{"antigravity", []string{".gemini", "config", "skills"}, true},
 }
 
-// universal is the lichen-harnesses name for ~/.agents/skills, the dir
-// every tool following the shared layout reads.
+// universal is the harness name for ~/.agents/skills, the dir every
+// tool following the shared layout reads.
 const universal = "universal"
 
-// isUniversal reports whether a skill limited to onlyFor (empty for
-// every harness) has its canonical copy in ~/.agents/skills.
-func isUniversal(onlyFor []string) bool {
-	return len(onlyFor) == 0 || slices.Contains(onlyFor, universal)
+// HarnessNames lists what a source can name as its harnesses.
+func HarnessNames() []string {
+	var names []string
+	for _, h := range harnesses {
+		names = append(names, h.name)
+	}
+	return append(names, universal)
 }
 
-// linkDirs is where a skill limited to onlyFor is linked from: the
-// skills dirs of the harnesses it is for, but those that already read
-// its universal copy.
-func linkDirs(onlyFor []string) ([]string, error) {
+// normalizeHarnesses checks that every name is a harness, and returns
+// them in HarnessNames order, each once.
+func normalizeHarnesses(names []string) ([]string, error) {
+	all := HarnessNames()
+	for _, n := range names {
+		if !slices.Contains(all, n) {
+			return nil, fmt.Errorf("unknown harness %q (there are %s)", n, strings.Join(all, ", "))
+		}
+	}
+	return slices.DeleteFunc(all, func(n string) bool { return !slices.Contains(names, n) }), nil
+}
+
+// linkDirs is where a skill for these harnesses is linked from: their
+// skills dirs, but for those that already read its universal copy.
+func linkDirs(names []string) ([]string, error) {
 	var dirs []string
 	for _, h := range harnesses {
-		if len(onlyFor) > 0 && !slices.Contains(onlyFor, h.name) {
+		if !slices.Contains(names, h.name) {
 			continue
 		}
-		if h.readsUniversal && isUniversal(onlyFor) {
+		if h.readsUniversal && slices.Contains(names, universal) {
 			continue
 		}
 		d, err := config.HomeJoin(h.dir...)
@@ -108,13 +123,22 @@ func linkDirs(onlyFor []string) ([]string, error) {
 	return dirs, nil
 }
 
-// Source selects agent skills to sync from one public git repo, for the
-// devices in its scope. Empty Skills means every skill the repo
-// publishes.
+// Source selects agent skills to sync from one public git repo, into
+// the harnesses it names, for the devices in its scope. Empty Skills
+// means every skill the repo publishes. Empty Harnesses means its skills
+// go nowhere.
 type Source struct {
-	Repo   string   `toml:"-"` // its key in skills.toml
-	Skills []string `toml:"skills,omitempty"`
+	Repo      string   `toml:"-"` // its key in skills.toml
+	Skills    []string `toml:"skills,omitempty"`
+	Harnesses []string `toml:"harnesses,omitempty"`
 	core.Scope
+}
+
+// is reports whether the source is the repo with this canonical key,
+// however its own key is spelled.
+func (s Source) is(key string) bool {
+	k, _, err := parseSpec(s.Repo)
+	return err == nil && k == key
 }
 
 // loadConfig reads the synced skills config, a table per source keyed
@@ -133,6 +157,9 @@ func loadConfig() (sources []Source, exists bool, err error) {
 			err := md.PrimitiveDecode(raw[key], &src)
 			if err == nil {
 				err = src.Check()
+			}
+			if err == nil {
+				_, err = normalizeHarnesses(src.Harnesses)
 			}
 			if err != nil {
 				return fmt.Errorf("%s: %w", key, err)
@@ -176,11 +203,10 @@ type manifest struct {
 }
 
 type skillState struct {
-	Repo    string   `json:"repo"`               // canonical "host/owner/repo" key
-	Tree    string   `json:"tree"`               // git tree hash of the installed skill dir
-	Links   []string `json:"links,omitempty"`    // harness symlinks lichen maintains
-	Dir     string   `json:"dir,omitempty"`      // the canonical copy (older manifests: ~/.agents/skills/<name>)
-	OnlyFor []string `json:"only_for,omitempty"` // lichen-harnesses at install, empty for all
+	Repo  string   `json:"repo"`            // canonical "host/owner/repo" key
+	Tree  string   `json:"tree"`            // git tree hash of the installed skill dir
+	Links []string `json:"links,omitempty"` // harness symlinks lichen maintains
+	Dir   string   `json:"dir,omitempty"`   // the canonical copy (older manifests: ~/.agents/skills/<name>)
 }
 
 // canonical is where this skill's canonical copy was installed.
@@ -199,8 +225,8 @@ func manifestPath() (string, error) {
 	return filepath.Join(d, "skills-manifest.json"), nil
 }
 
-// PrivateDir holds the canonical copies of skills limited to some
-// harnesses, reachable only through those harnesses' links.
+// PrivateDir holds the canonical copies of skills that aren't universal,
+// reachable only through their harnesses' links.
 func PrivateDir() (string, error) {
 	d, err := config.DataDir()
 	if err != nil {
@@ -296,57 +322,26 @@ func sanitizeName(s string) string {
 	return strings.Trim(b.String(), ".-")
 }
 
-// skillMeta is what lichen reads from SKILL.md's YAML frontmatter.
-// OnlyFor empty means every harness.
-type skillMeta struct {
-	name    string
-	onlyFor []string
-}
-
-// parseFrontmatter pulls the name and metadata.lichen-harnesses out of
-// SKILL.md's YAML frontmatter. A full YAML parser is overkill for two
-// keys. The spec's metadata map only holds strings, so the harnesses are
-// one comma-separated value: "lichen-harnesses: claude, codex".
-func parseFrontmatter(md []byte) skillMeta {
-	var meta skillMeta
+// frontmatterName pulls the name out of SKILL.md's YAML frontmatter. A
+// full YAML parser is overkill for one top-level key.
+func frontmatterName(md []byte) string {
 	lines := strings.Split(string(md), "\n")
-	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
-		return meta
+	if strings.TrimSpace(lines[0]) != "---" {
+		return ""
 	}
-	section := "" // the top-level key an indented line belongs to
 	for _, line := range lines[1:] {
-		t := strings.TrimSpace(line)
-		if t == "---" {
+		if strings.TrimSpace(line) == "---" {
 			break
 		}
-		key, val, ok := strings.Cut(t, ":")
-		if !ok {
+		// An indented key belongs to a map, like metadata's.
+		key, val, ok := strings.Cut(line, ":")
+		if !ok || strings.TrimRight(key, " \t") != "name" {
 			continue
 		}
 		val, _, _ = strings.Cut(val, " #") // a trailing YAML comment
-		key, val = strings.TrimSpace(key), strings.Trim(strings.TrimSpace(val), `"'`)
-		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
-			section = key
-			if key == "name" {
-				meta.name = val
-			}
-		} else if section == "metadata" && key == "lichen-harnesses" {
-			for _, h := range strings.Split(val, ",") {
-				if h = sanitizeName(h); h != "" {
-					meta.onlyFor = append(meta.onlyFor, h)
-				}
-			}
-		}
+		return strings.Trim(strings.TrimSpace(val), `"'`)
 	}
-	slices.Sort(meta.onlyFor)
-	meta.onlyFor = slices.Compact(meta.onlyFor)
-	return meta
-}
-
-// discovered is one skill found in a clone.
-type discovered struct {
-	dir     string   // relative to the clone root
-	onlyFor []string // from lichen-harnesses
+	return ""
 }
 
 // discover walks a clone for skill directories: any directory at most
@@ -354,9 +349,9 @@ type discovered struct {
 // skills CLI uses (a single-skill repo root, skills/<name>,
 // .claude/skills/<name>, skills/<category>/<name>). A skill's own
 // subtree is not searched further, so a shallow skill shadows nested
-// duplicates. Returns skill name → where it is.
-func discover(root, repo string) map[string]discovered {
-	found := map[string]discovered{}
+// duplicates. Returns skill name → its dir, relative to the clone root.
+func discover(root, repo string) map[string]string {
+	found := map[string]string{}
 	var walk func(dir string, depth int)
 	walk = func(dir string, depth int) {
 		if md, err := os.ReadFile(filepath.Join(root, dir, "SKILL.md")); err == nil {
@@ -364,13 +359,12 @@ func discover(root, repo string) map[string]discovered {
 			if dir == "." {
 				fallback = repo
 			}
-			meta := parseFrontmatter(md)
-			name := sanitizeName(meta.name)
+			name := sanitizeName(frontmatterName(md))
 			if name == "" {
 				name = sanitizeName(fallback)
 			}
 			if _, dup := found[name]; name != "" && !dup {
-				found[name] = discovered{dir: dir, onlyFor: meta.onlyFor}
+				found[name] = dir
 			}
 			return
 		}
@@ -593,10 +587,10 @@ func uninstall(canonical string, links []string) {
 
 // target is one skill the config wants installed.
 type target struct {
-	repo    string   // canonical repo key
-	dir     string   // absolute skill dir inside the clone
-	tree    string   // tree hash of the skill dir
-	onlyFor []string // lichen-harnesses, empty for all
+	repo      string   // canonical repo key
+	dir       string   // absolute skill dir inside the clone
+	tree      string   // tree hash of the skill dir
+	harnesses []string // its source's
 }
 
 // Update is Reconcile without the poll throttle: every repo is checked
@@ -628,9 +622,10 @@ func run(env *core.Env, force bool) error {
 	// Fold config entries into one selection per repo (a hand-edited
 	// config may list a repo twice).
 	type selection struct {
-		url    string
-		all    bool
-		skills map[string]bool
+		url       string
+		all       bool
+		skills    map[string]bool
+		harnesses []string
 	}
 	selections := map[string]*selection{}
 	var order []string
@@ -639,9 +634,9 @@ func run(env *core.Env, force bool) error {
 	// the whole pass rather than uninstalling what it covers.
 	skipRemovals := false
 	for _, src := range sources {
-		// What a source for other devices covers goes from this one,
-		// whatever it is.
-		if !env.Device.In(src.Scope) {
+		// What a source for other devices, or for no harness, covers goes
+		// from this one, whatever it is.
+		if !env.Device.In(src.Scope) || len(src.Harnesses) == 0 {
 			continue
 		}
 		key, url, err := parseSpec(src.Repo)
@@ -662,6 +657,7 @@ func run(env *core.Env, force bool) error {
 		for _, n := range src.Skills {
 			sel.skills[sanitizeName(n)] = true
 		}
+		sel.harnesses = append(sel.harnesses, src.Harnesses...)
 	}
 
 	failed := map[string]bool{}
@@ -692,7 +688,7 @@ func run(env *core.Env, force bool) error {
 				lg.Printf("skills: %s also provides %q (keeping the copy from %s)", key, name, prev.repo)
 				continue
 			}
-			tree, err := treeHash(dir, found[name].dir)
+			tree, err := treeHash(dir, found[name])
 			if err != nil {
 				// Failing to hash must not read as "the skill vanished":
 				// protect the whole repo's installs from removal.
@@ -700,7 +696,7 @@ func run(env *core.Env, force bool) error {
 				lg.Printf("skills: %s: %v", key, err)
 				continue
 			}
-			desired[name] = target{repo: key, dir: filepath.Join(dir, found[name].dir), tree: tree, onlyFor: found[name].onlyFor}
+			desired[name] = target{repo: key, dir: filepath.Join(dir, found[name]), tree: tree, harnesses: sel.harnesses}
 		}
 	}
 
@@ -714,19 +710,19 @@ func run(env *core.Env, force bool) error {
 	}
 	for _, name := range slices.Sorted(maps.Keys(desired)) {
 		t := desired[name]
-		// Harnesses that read ~/.agents/skills would still reach a skill
-		// that isn't universal there.
-		store := agents
-		if !isUniversal(t.onlyFor) {
-			store = private
+		// Only a universal skill goes in ~/.agents/skills: harnesses that
+		// read it would reach any other there too.
+		store := private
+		if slices.Contains(t.harnesses, universal) {
+			store = agents
 		}
-		links, err := linkDirs(t.onlyFor)
+		links, err := linkDirs(t.harnesses)
 		if err != nil {
 			return err
 		}
 		canonical := filepath.Join(store, name)
 		st := man.Skills[name]
-		// A changed lichen-harnesses can move the skill between stores.
+		// Changed harnesses can move the skill between stores.
 		owned := st != nil && st.canonical(agents, name) == canonical
 		_, statErr := os.Lstat(canonical)
 		// Nothing but lichen writes its private store, so only the shared
@@ -749,7 +745,7 @@ func run(env *core.Env, force bool) error {
 			} else if st != nil {
 				uninstall(st.canonical(agents, name), st.Links)
 			}
-			st = &skillState{Repo: t.repo, Tree: t.tree, Links: prev, Dir: canonical, OnlyFor: t.onlyFor}
+			st = &skillState{Repo: t.repo, Tree: t.tree, Links: prev, Dir: canonical}
 			man.Skills[name] = st
 			// Persist each install as it lands: a pass killed between
 			// copy and a single final save would leave the directory on
@@ -758,14 +754,7 @@ func run(env *core.Env, force bool) error {
 			if err := man.save(); err != nil {
 				return err
 			}
-			only := ""
-			if len(t.onlyFor) > 0 {
-				only = " (" + strings.Join(t.onlyFor, ", ") + " only)"
-				if store == private && len(links) == 0 {
-					only += ", but lichen knows none of them"
-				}
-			}
-			lg.Printf("skills: installed %s@%.8s from %s%s", name, t.tree, t.repo, only)
+			lg.Printf("skills: installed %s@%.8s from %s", name, t.tree, t.repo)
 		}
 		st.Links = syncLinks(name, canonical, st.Links, links, lg)
 	}
@@ -801,11 +790,13 @@ func run(env *core.Env, force bool) error {
 // skill source, saves the skills config, and returns the source as saved,
 // under its canonical key. Install happens on the next reconcile, which
 // the CLI runs immediately after. It goes to the devices scope names, or
-// only here when it names none, and a source that is already there
-// keeps its own devices too (see core.Env.Adding). A repo without the skills named, or
-// without any, is refused before anything is saved: every device would otherwise go
-// on failing to install them.
-func AddSource(env *core.Env, spec string, names []string, scope core.Scope) (Source, error) {
+// only here when it names none, and into the harnesses named. A source
+// that is already there keeps its own devices and harnesses too (see
+// core.Env.Adding), but one with no harnesses has to name some: nothing
+// goes anywhere it wasn't asked to. A repo without the skills named, or
+// without any, is refused before anything is saved: every device would
+// otherwise go on failing to install them.
+func AddSource(env *core.Env, spec string, names, harnesses []string, scope core.Scope) (Source, error) {
 	key, url, err := parseSpec(spec)
 	if err != nil {
 		return Source{}, err
@@ -814,6 +805,7 @@ func AddSource(env *core.Env, spec string, names []string, scope core.Scope) (So
 	if err != nil {
 		return Source{}, err
 	}
+	idx := slices.IndexFunc(sources, func(src Source) bool { return src.is(key) })
 	for i, raw := range names {
 		if names[i] = sanitizeName(raw); names[i] == "" {
 			// Dropping it silently would leave an empty pin, which
@@ -821,29 +813,30 @@ func AddSource(env *core.Env, spec string, names []string, scope core.Scope) (So
 			return Source{}, fmt.Errorf("invalid skill name %q", raw)
 		}
 	}
+	slices.Sort(names)
+	names = slices.Compact(names)
+	if idx < 0 {
+		sources = append(sources, Source{Repo: key, Skills: names})
+		idx = len(sources) - 1
+	} else if src := &sources[idx]; len(names) == 0 {
+		src.Skills = nil // widen to every skill in the repo
+	} else if src.Skills != nil {
+		src.Skills = slices.Compact(slices.Sorted(slices.Values(append(src.Skills, names...))))
+	}
+	src := &sources[idx]
+	if src.Harnesses, err = normalizeHarnesses(append(src.Harnesses, harnesses...)); err != nil {
+		return Source{}, err
+	}
+	if len(src.Harnesses) == 0 {
+		return Source{}, fmt.Errorf("name the harnesses %s goes into with --harness (%s)", key, strings.Join(HarnessNames(), ", "))
+	}
 	if err := hasSkills(key, url, names, env.Log); err != nil {
 		return Source{}, err
 	}
-	slices.Sort(names)
-	names = slices.Compact(names)
-	for i, src := range sources {
-		k, _, err := parseSpec(src.Repo)
-		if err != nil || k != key {
-			continue
-		}
-		switch {
-		case len(names) == 0:
-			sources[i].Skills = nil // widen to every skill in the repo
-		case src.Skills != nil:
-			sources[i].Skills = slices.Compact(slices.Sorted(slices.Values(append(src.Skills, names...))))
-		}
-		sources[i].Scope = env.Adding(src.Scope, scope)
-		saved := sources[i]
-		saved.Repo = key
-		return saved, saveSources(sources)
-	}
-	sources = append(sources, Source{Repo: key, Skills: names, Scope: env.Adding(core.Scope{}, scope)})
-	return sources[len(sources)-1], saveSources(sources)
+	src.Scope = env.Adding(src.Scope, scope)
+	saved := *src
+	saved.Repo = key
+	return saved, saveSources(sources)
 }
 
 // hasSkills fetches a repo and checks it has the skills named, or any.
@@ -873,6 +866,21 @@ func hasSkills(key, url string, names []string, lg *log.Logger) error {
 
 // SetScope changes the scope of a repo's skills through edit.
 func SetScope(spec string, edit func(core.Scope) core.Scope) error {
+	return editSource(spec, func(src *Source) { src.Scope = edit(src.Scope) })
+}
+
+// SetHarnesses changes the harnesses a repo's skills go into to exactly
+// these, and returns them as saved.
+func SetHarnesses(spec string, harnesses []string) ([]string, error) {
+	harnesses, err := normalizeHarnesses(harnesses)
+	if err != nil {
+		return nil, err
+	}
+	return harnesses, editSource(spec, func(src *Source) { src.Harnesses = harnesses })
+}
+
+// editSource changes a repo's entries in the skills config through edit.
+func editSource(spec string, edit func(*Source)) error {
 	key, _, err := parseSpec(spec)
 	if err != nil {
 		return err
@@ -882,9 +890,10 @@ func SetScope(spec string, edit func(core.Scope) core.Scope) error {
 		return err
 	}
 	found := false
-	for i, src := range sources {
-		if k, _, err := parseSpec(src.Repo); err == nil && k == key {
-			sources[i].Scope, found = edit(sources[i].Scope), true
+	for i := range sources {
+		if sources[i].is(key) {
+			edit(&sources[i])
+			found = true
 		}
 	}
 	if !found {
@@ -913,10 +922,7 @@ func RemoveSources(args []string) error {
 				return err
 			}
 			n := len(sources)
-			sources = slices.DeleteFunc(sources, func(s Source) bool {
-				k, _, err := parseSpec(s.Repo)
-				return err == nil && k == key
-			})
+			sources = slices.DeleteFunc(sources, func(s Source) bool { return s.is(key) })
 			if len(sources) == n {
 				return fmt.Errorf("%s is not a synced skill repo (see: lichen skills list)", key)
 			}
@@ -942,9 +948,8 @@ func RemoveSources(args []string) error {
 
 // Skill is one installed, lichen-managed skill.
 type Skill struct {
-	Name    string
-	Repo    string
-	OnlyFor []string // the only harnesses it is for, empty for all
+	Name string
+	Repo string
 }
 
 // Installed lists the skills this machine's manifest owns, sorted by name.
@@ -955,7 +960,7 @@ func Installed() ([]Skill, error) {
 	}
 	var out []Skill
 	for _, name := range slices.Sorted(maps.Keys(man.Skills)) {
-		out = append(out, Skill{Name: name, Repo: man.Skills[name].Repo, OnlyFor: man.Skills[name].OnlyFor})
+		out = append(out, Skill{Name: name, Repo: man.Skills[name].Repo})
 	}
 	return out, nil
 }
