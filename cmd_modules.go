@@ -51,9 +51,7 @@ func cmdSkillsAdd(args []string) error {
 			if i++; i >= len(args) {
 				return fmt.Errorf("--harness needs harnesses (%s)", strings.Join(skills.HarnessNames(), ", "))
 			}
-			for _, h := range strings.Split(args[i], ",") {
-				harnesses = append(harnesses, strings.TrimSpace(h))
-			}
+			harnesses = append(harnesses, harnessFlag(args[i])...)
 		case args[i] == "--include" || args[i] == "--exclude":
 			if i++; i >= len(args) {
 				return fmt.Errorf("%s needs devices or groups", args[i-1])
@@ -105,6 +103,15 @@ func cmdSkillsAdd(args []string) error {
 	}
 	fmt.Printf("syncing %d skill(s) from %s into %s: %s\n", len(mine), src.Repo, strings.Join(src.Harnesses, ", "), strings.Join(mine, ", "))
 	return nil
+}
+
+// harnessFlag splits the comma-separated harnesses --harness takes.
+func harnessFlag(list string) []string {
+	var names []string
+	for _, h := range strings.Split(list, ",") {
+		names = append(names, strings.TrimSpace(h))
+	}
+	return names
 }
 
 func cmdSkillsHarness(args []string) error {
@@ -209,6 +216,8 @@ func cmdMCP(args []string) error {
 		return cmdScope("mcp", args, func(_ *core.Env, name string, edit func(core.Scope) core.Scope) error {
 			return mcp.SetScope(name, edit)
 		})
+	case "harness":
+		return cmdMCPHarness(args[1:])
 	case "list", "ls":
 		return cmdMCPList()
 	}
@@ -226,8 +235,11 @@ func cmdMCPAdd(args []string) error {
 	// Flags go before the command: whatever follows it is its own.
 	name, rest := args[0], args[1:]
 	var scope core.Scope
-	for len(rest) > 1 && (rest[0] == "--include" || rest[0] == "--exclude") {
-		if err := scopeFlag(&scope, rest[0], rest[1]); err != nil {
+	var harnesses []string
+	for len(rest) > 1 && (rest[0] == "--include" || rest[0] == "--exclude" || rest[0] == "--harness") {
+		if rest[0] == "--harness" {
+			harnesses = append(harnesses, harnessFlag(rest[1])...)
+		} else if err := scopeFlag(&scope, rest[0], rest[1]); err != nil {
 			return err
 		}
 		rest = rest[2:]
@@ -250,7 +262,7 @@ func cmdMCPAdd(args []string) error {
 		}
 		s = mcp.Server{URL: rest[0]}
 	}
-	s.Scope = scope
+	s.Scope, s.Harnesses = scope, harnesses
 	var here bool
 	err := change("mcp: add "+name, func(env *core.Env) (err error) {
 		s, err = mcp.AddServer(env, name, s)
@@ -278,6 +290,22 @@ func cmdMCPAdd(args []string) error {
 		}
 		fmt.Printf("syncing %s, installed in %s (restart running sessions to pick it up)\n", name, strings.Join(e.Harnesses, ", "))
 	}
+	return nil
+}
+
+func cmdMCPHarness(args []string) error {
+	if len(args) < 2 {
+		return usage("mcp", "harness")
+	}
+	name, harnesses := args[0], args[1:]
+	err := change("mcp: harness "+name, func(*core.Env) (err error) {
+		harnesses, err = mcp.SetHarnesses(name, harnesses)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s now goes into %s (restart running sessions to pick it up)\n", name, strings.Join(harnesses, ", "))
 	return nil
 }
 
@@ -319,6 +347,8 @@ func cmdMCPList() error {
 		where := "not installed here, see: lichen logs"
 		if len(e.Harnesses) > 0 {
 			where = strings.Join(e.Harnesses, ", ")
+		} else if len(e.Server.Harnesses) == 0 {
+			where = "no harnesses, see: lichen mcp harness"
 		}
 		where = core.Describe(e.Server.Scope) + ": " + where
 		fmt.Println(line + "  " + dim("("+where+")"))

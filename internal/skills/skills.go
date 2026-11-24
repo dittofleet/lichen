@@ -94,13 +94,7 @@ func HarnessNames() []string {
 // normalizeHarnesses checks that every name is a harness, and returns
 // them in HarnessNames order, each once.
 func normalizeHarnesses(names []string) ([]string, error) {
-	all := HarnessNames()
-	for _, n := range names {
-		if !slices.Contains(all, n) {
-			return nil, fmt.Errorf("unknown harness %q (there are %s)", n, strings.Join(all, ", "))
-		}
-	}
-	return slices.DeleteFunc(all, func(n string) bool { return !slices.Contains(names, n) }), nil
+	return core.PickHarnesses(HarnessNames(), names)
 }
 
 // linkDirs is where a skill for these harnesses is linked from: their

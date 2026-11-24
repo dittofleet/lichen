@@ -271,6 +271,17 @@ func Describe(s Scope) string {
 
 var groupName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 
+// PickHarnesses checks that every name is one of all, the harnesses a
+// module knows, and returns them in all's order, each once.
+func PickHarnesses(all, names []string) ([]string, error) {
+	for _, n := range names {
+		if !slices.Contains(all, n) {
+			return nil, fmt.Errorf("unknown harness %q (there are %s)", n, strings.Join(all, ", "))
+		}
+	}
+	return slices.DeleteFunc(slices.Clone(all), func(n string) bool { return !slices.Contains(names, n) }), nil
+}
+
 // ValidGroup reports whether a name can be a device group (or device).
 func ValidGroup(name string) error {
 	if !groupName.MatchString(name) {

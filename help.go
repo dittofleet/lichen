@@ -78,15 +78,18 @@ var help = []helpSection{
 			name:    "mcp",
 			usage:   "mcp <command>",
 			summary: "Sync MCP servers into Claude Code, Codex and Antigravity",
-			about: "Installed at user scope through each harness's CLI. Missing harnesses are " +
-				"skipped. Running sessions need a restart to see changes.",
+			about: "Installed at user scope, through each harness's CLI, into the harnesses a server " +
+				"names: claude, codex or antigravity. Missing harnesses are skipped. Running " +
+				"sessions need a restart to see changes.",
 			subs: []helpSub{
-				{"add", "mcp add <name> [--include <devices,groups> [--exclude <devices,groups>]] <command> [<arg>...]", "Add a server that runs a command",
-					"Flags go before the command. For this device only, unless --include names others."},
-				{"add", "mcp add <name> [--include <devices,groups> [--exclude <devices,groups>]] <url>", "Add a server at a URL", ""},
+				{"add", "mcp add <name> --harness <harnesses> [--include <devices,groups> [--exclude <devices,groups>]] <command> [<arg>...]", "Add a server that runs a command",
+					"Flags go before the command. For this device only, unless --include names others. " +
+						"A server already synced keeps its harnesses without --harness, and gains the ones it names."},
+				{"add", "mcp add <name> --harness <harnesses> [--include <devices,groups> [--exclude <devices,groups>]] <url>", "Add a server at a URL", ""},
 				{"remove", "mcp remove <name>...", "Stop syncing and uninstall", ""},
 				{"include", "mcp include <name> <device|group>...", "Install a server on these devices too", ""},
 				{"exclude", "mcp exclude <name> <device|group>...", "Uninstall a server from these devices", ""},
+				{"harness", "mcp harness <name> <harness>...", "Change the harnesses a server goes into", ""},
 				{"list", "mcp list", "List synced servers", ""},
 			},
 		},
