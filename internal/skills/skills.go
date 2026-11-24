@@ -792,7 +792,7 @@ func run(env *core.Env, force bool) error {
 // the CLI runs immediately after. It goes to the devices scope names, or
 // only here when it names none, and into the harnesses named. A source
 // that is already there keeps its own devices and harnesses too (see
-// core.Env.Adding), but a new one has to name its harnesses: nothing
+// core.Env.Adding), but one with no harnesses has to name some: nothing
 // goes anywhere it wasn't asked to. A repo without the skills named, or
 // without any, is refused before anything is saved: every device would
 // otherwise go on failing to install them.
@@ -806,9 +806,6 @@ func AddSource(env *core.Env, spec string, names, harnesses []string, scope core
 		return Source{}, err
 	}
 	idx := slices.IndexFunc(sources, func(src Source) bool { return src.is(key) })
-	if idx < 0 && len(harnesses) == 0 {
-		return Source{}, fmt.Errorf("name the harnesses %s goes into with --harness (%s)", key, strings.Join(HarnessNames(), ", "))
-	}
 	for i, raw := range names {
 		if names[i] = sanitizeName(raw); names[i] == "" {
 			// Dropping it silently would leave an empty pin, which
@@ -829,6 +826,9 @@ func AddSource(env *core.Env, spec string, names, harnesses []string, scope core
 	src := &sources[idx]
 	if src.Harnesses, err = normalizeHarnesses(append(src.Harnesses, harnesses...)); err != nil {
 		return Source{}, err
+	}
+	if len(src.Harnesses) == 0 {
+		return Source{}, fmt.Errorf("name the harnesses %s goes into with --harness (%s)", key, strings.Join(HarnessNames(), ", "))
 	}
 	if err := hasSkills(key, url, names, env.Log); err != nil {
 		return Source{}, err

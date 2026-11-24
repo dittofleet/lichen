@@ -173,7 +173,11 @@ func cmdSkillsList() error {
 	fromRepo := map[string]bool{}
 	for _, s := range installed {
 		fromRepo[s.Repo] = true
-		fmt.Printf("%-*s  %s\n", width, s.Name, dim(s.Repo+"  ("+into[s.Repo]+")"))
+		repo := s.Repo
+		if into[repo] != "" {
+			repo += "  (" + into[repo] + ")"
+		}
+		fmt.Printf("%-*s  %s\n", width, s.Name, dim(repo))
 	}
 	for _, src := range configured {
 		switch {
