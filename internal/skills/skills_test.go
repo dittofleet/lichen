@@ -93,12 +93,12 @@ func TestLinkDirs(t *testing.T) {
 	}
 }
 
-func TestOrderHarnesses(t *testing.T) {
-	got, err := orderHarnesses([]string{"universal", "codex", "claude", "codex"})
+func TestNormalizeHarnesses(t *testing.T) {
+	got, err := normalizeHarnesses([]string{"universal", "codex", "claude", "codex"})
 	if err != nil || !slices.Equal(got, []string{"claude", "codex", "universal"}) {
-		t.Errorf("orderHarnesses = %v, %v", got, err)
+		t.Errorf("normalizeHarnesses = %v, %v", got, err)
 	}
-	if _, err := orderHarnesses([]string{"claude", "cursor"}); err == nil {
+	if _, err := normalizeHarnesses([]string{"claude", "cursor"}); err == nil {
 		t.Error("an unknown harness passed")
 	}
 }

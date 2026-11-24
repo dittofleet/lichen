@@ -51,7 +51,9 @@ func cmdSkillsAdd(args []string) error {
 			if i++; i >= len(args) {
 				return fmt.Errorf("--harness needs harnesses (%s)", strings.Join(skills.HarnessNames(), ", "))
 			}
-			harnesses = append(harnesses, harnessList(args[i])...)
+			for _, h := range strings.Split(args[i], ",") {
+				harnesses = append(harnesses, strings.TrimSpace(h))
+			}
 		case args[i] == "--include" || args[i] == "--exclude":
 			if i++; i >= len(args) {
 				return fmt.Errorf("%s needs devices or groups", args[i-1])
@@ -105,16 +107,11 @@ func cmdSkillsAdd(args []string) error {
 	return nil
 }
 
-// harnessList splits harness names given with commas, spaces or both.
-func harnessList(args ...string) []string {
-	return strings.FieldsFunc(strings.Join(args, ","), func(r rune) bool { return r == ',' || r == ' ' })
-}
-
 func cmdSkillsHarness(args []string) error {
 	if len(args) < 2 {
 		return usage("skills", "harness")
 	}
-	repo, harnesses := args[0], harnessList(args[1:]...)
+	repo, harnesses := args[0], args[1:]
 	err := change("skills: harness "+repo, func(*core.Env) (err error) {
 		harnesses, err = skills.SetHarnesses(repo, harnesses)
 		return err

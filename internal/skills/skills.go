@@ -7,8 +7,8 @@
 // names "universal" has its skills in ~/.agents/skills instead, the
 // shared dir some harnesses read directly. WHICH repos to sync, and into
 // which harnesses, lives in this module's own config file (skills.toml
-// in the sync folder). Clones and install
-// bookkeeping stay machine-local. Only skills recorded in the local manifest are ever
+// in the sync folder). Clones and install bookkeeping stay
+// machine-local. Only skills recorded in the local manifest are ever
 // touched, so skills installed by other means (npx skills, a manual
 // copy) always coexist with lichen's.
 package skills
@@ -91,9 +91,9 @@ func HarnessNames() []string {
 	return append(names, universal)
 }
 
-// orderHarnesses checks that every name is a harness, and returns them
-// in HarnessNames order, each once.
-func orderHarnesses(names []string) ([]string, error) {
+// normalizeHarnesses checks that every name is a harness, and returns
+// them in HarnessNames order, each once.
+func normalizeHarnesses(names []string) ([]string, error) {
 	all := HarnessNames()
 	for _, n := range names {
 		if !slices.Contains(all, n) {
@@ -134,6 +134,13 @@ type Source struct {
 	core.Scope
 }
 
+// is reports whether the source is the repo with this canonical key,
+// however its own key is spelled.
+func (s Source) is(key string) bool {
+	k, _, err := parseSpec(s.Repo)
+	return err == nil && k == key
+}
+
 // loadConfig reads the synced skills config, a table per source keyed
 // by its repo. The exists flag lets the caller tell "no file yet" (a
 // fresh machine before its first sync, or a file briefly moved aside)
@@ -152,7 +159,7 @@ func loadConfig() (sources []Source, exists bool, err error) {
 				err = src.Check()
 			}
 			if err == nil {
-				_, err = orderHarnesses(src.Harnesses)
+				_, err = normalizeHarnesses(src.Harnesses)
 			}
 			if err != nil {
 				return fmt.Errorf("%s: %w", key, err)
@@ -798,20 +805,9 @@ func AddSource(env *core.Env, spec string, names, harnesses []string, scope core
 	if err != nil {
 		return Source{}, err
 	}
-	idx := slices.IndexFunc(sources, func(src Source) bool {
-		k, _, err := parseSpec(src.Repo)
-		return err == nil && k == key
-	})
-	if idx < 0 {
-		if len(harnesses) == 0 {
-			return Source{}, fmt.Errorf("name the harnesses %s goes into with --harness (%s)", key, strings.Join(HarnessNames(), ", "))
-		}
-		sources = append(sources, Source{Repo: key, Skills: []string{}})
-		idx = len(sources) - 1
-	}
-	src := &sources[idx]
-	if src.Harnesses, err = orderHarnesses(append(src.Harnesses, harnesses...)); err != nil {
-		return Source{}, err
+	idx := slices.IndexFunc(sources, func(src Source) bool { return src.is(key) })
+	if idx < 0 && len(harnesses) == 0 {
+		return Source{}, fmt.Errorf("name the harnesses %s goes into with --harness (%s)", key, strings.Join(HarnessNames(), ", "))
 	}
 	for i, raw := range names {
 		if names[i] = sanitizeName(raw); names[i] == "" {
@@ -820,14 +816,22 @@ func AddSource(env *core.Env, spec string, names, harnesses []string, scope core
 			return Source{}, fmt.Errorf("invalid skill name %q", raw)
 		}
 	}
-	if err := hasSkills(key, url, names, env.Log); err != nil {
+	slices.Sort(names)
+	names = slices.Compact(names)
+	if idx < 0 {
+		sources = append(sources, Source{Repo: key, Skills: names})
+		idx = len(sources) - 1
+	} else if src := &sources[idx]; len(names) == 0 {
+		src.Skills = nil // widen to every skill in the repo
+	} else if src.Skills != nil {
+		src.Skills = slices.Compact(slices.Sorted(slices.Values(append(src.Skills, names...))))
+	}
+	src := &sources[idx]
+	if src.Harnesses, err = normalizeHarnesses(append(src.Harnesses, harnesses...)); err != nil {
 		return Source{}, err
 	}
-	switch {
-	case len(names) == 0:
-		src.Skills = nil // widen to every skill in the repo
-	case src.Skills != nil:
-		src.Skills = slices.Compact(slices.Sorted(slices.Values(append(src.Skills, names...))))
+	if err := hasSkills(key, url, names, env.Log); err != nil {
+		return Source{}, err
 	}
 	src.Scope = env.Adding(src.Scope, scope)
 	saved := *src
@@ -868,7 +872,7 @@ func SetScope(spec string, edit func(core.Scope) core.Scope) error {
 // SetHarnesses changes the harnesses a repo's skills go into to exactly
 // these, and returns them as saved.
 func SetHarnesses(spec string, harnesses []string) ([]string, error) {
-	harnesses, err := orderHarnesses(harnesses)
+	harnesses, err := normalizeHarnesses(harnesses)
 	if err != nil {
 		return nil, err
 	}
@@ -886,8 +890,8 @@ func editSource(spec string, edit func(*Source)) error {
 		return err
 	}
 	found := false
-	for i, src := range sources {
-		if k, _, err := parseSpec(src.Repo); err == nil && k == key {
+	for i := range sources {
+		if sources[i].is(key) {
 			edit(&sources[i])
 			found = true
 		}
@@ -918,10 +922,7 @@ func RemoveSources(args []string) error {
 				return err
 			}
 			n := len(sources)
-			sources = slices.DeleteFunc(sources, func(s Source) bool {
-				k, _, err := parseSpec(s.Repo)
-				return err == nil && k == key
-			})
+			sources = slices.DeleteFunc(sources, func(s Source) bool { return s.is(key) })
 			if len(sources) == n {
 				return fmt.Errorf("%s is not a synced skill repo (see: lichen skills list)", key)
 			}
