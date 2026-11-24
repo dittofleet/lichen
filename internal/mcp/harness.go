@@ -102,19 +102,15 @@ func (claude) installed() (map[string]bool, error) {
 }
 
 // serverNames reads the names under mcpServers in a harness's JSON
-// config. A missing or empty file has none.
+// config. A missing file has none, but an empty one is an error: it may
+// be caught mid-rewrite, and reading it as "no servers" would drop
+// lichen's ownership of every server it added.
 func serverNames(path string) (map[string]bool, error) {
-	data, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return nil, err
-	}
 	var cfg struct {
 		MCPServers map[string]json.RawMessage `json:"mcpServers"`
 	}
-	if len(bytes.TrimSpace(data)) > 0 {
-		if err := json.Unmarshal(data, &cfg); err != nil {
-			return nil, fmt.Errorf("parsing %s: %w", path, err)
-		}
+	if _, err := config.ReadJSON(path, &cfg); err != nil {
+		return nil, err
 	}
 	names := map[string]bool{}
 	for name := range cfg.MCPServers {
@@ -278,11 +274,14 @@ func (a antigravity) add(name string, s Server) error {
 
 // installed reads mcp_config.json directly (read-only): `agy mcp list`
 // prints a table whose names may hold spaces. A fresh install leaves the
-// file empty.
+// file empty, which has no servers until agy first writes it.
 func (antigravity) installed() (map[string]bool, error) {
 	p, err := config.HomeJoin(".gemini", "config", "mcp_config.json")
 	if err != nil {
 		return nil, err
+	}
+	if fi, err := os.Stat(p); err == nil && fi.Size() == 0 {
+		return map[string]bool{}, nil
 	}
 	return serverNames(p)
 }
