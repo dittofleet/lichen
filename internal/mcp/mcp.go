@@ -1,5 +1,5 @@
 // Package mcp is lichen's mcp module: it installs MCP servers into every
-// supported harness (Claude Code and Codex) through each harness's own
+// supported harness (Claude Code, Codex and Antigravity) through each harness's own
 // `mcp add` and `mcp remove` commands, so the harness stays the only
 // writer of its config file. A server is just a name and either a
 // command to launch or a URL to reach: no env vars, headers or auth, so
@@ -67,7 +67,7 @@ func IsURL(arg string) bool {
 }
 
 // Names must work in every harness: Claude Code allows only letters,
-// digits, - and _ (Codex allows a superset).
+// digits, - and _ (Codex and Antigravity allow a superset).
 var nameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 func validate(name string, s Server) error {

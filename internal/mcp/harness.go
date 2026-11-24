@@ -38,7 +38,7 @@ var errTaken = errors.New("name already taken")
 
 // harnesses lists the supported harnesses. A var so tests can swap in
 // fakes.
-var harnesses = []harness{claude{}, codex{}}
+var harnesses = []harness{claude{}, codex{}, antigravity{}}
 
 // cliTimeout bounds every harness command: the caller holds the
 // cross-process lock, so a wedged CLI must not wedge the daemon.
@@ -98,10 +98,18 @@ func (claude) installed() (map[string]bool, error) {
 			return nil, err
 		}
 	}
+	return serverNames(p)
+}
+
+// serverNames reads the names under mcpServers in a harness's JSON
+// config. A missing file has none, but an empty one is an error: it may
+// be caught mid-rewrite, and reading it as "no servers" would drop
+// lichen's ownership of every server it added.
+func serverNames(path string) (map[string]bool, error) {
 	var cfg struct {
 		MCPServers map[string]json.RawMessage `json:"mcpServers"`
 	}
-	if _, err := config.ReadJSON(p, &cfg); err != nil {
+	if _, err := config.ReadJSON(path, &cfg); err != nil {
 		return nil, err
 	}
 	names := map[string]bool{}
@@ -233,5 +241,55 @@ func (codex) installed() (map[string]bool, error) {
 
 func (codex) remove(name string) error {
 	_, err := run("codex", "mcp", "remove", name)
+	return err
+}
+
+// antigravity drives the Antigravity CLI (agy), whose servers live in
+// ~/.gemini/config/mcp_config.json. `agy mcp add` silently replaces a
+// server of the same name, so add checks first.
+type antigravity struct{}
+
+func (antigravity) name() string { return "antigravity" }
+
+func (antigravity) available() bool {
+	_, err := exec.LookPath("agy")
+	return err == nil
+}
+
+func (a antigravity) add(name string, s Server) error {
+	present, err := a.installed()
+	if err != nil {
+		return err
+	}
+	if present[name] {
+		return errTaken
+	}
+	if s.URL == "" {
+		_, err = run("agy", append([]string{"mcp", "add", name, "--", s.Command}, s.Args...)...)
+	} else {
+		_, err = run("agy", "mcp", "add", name, s.URL)
+	}
+	return err
+}
+
+// installed reads mcp_config.json directly (read-only): `agy mcp list`
+// prints a table whose names may hold spaces. A fresh install leaves the
+// file empty, which has no servers until agy first writes it.
+func (antigravity) installed() (map[string]bool, error) {
+	p, err := config.HomeJoin(".gemini", "config", "mcp_config.json")
+	if err != nil {
+		return nil, err
+	}
+	if fi, err := os.Stat(p); err == nil && fi.Size() == 0 {
+		return map[string]bool{}, nil
+	}
+	return serverNames(p)
+}
+
+func (antigravity) remove(name string) error {
+	out, err := run("agy", "mcp", "remove", name)
+	if err != nil && strings.Contains(out, "not found") {
+		return nil
+	}
 	return err
 }

@@ -4,7 +4,7 @@
 // restarted.
 package service
 
-// The daemon runs git and each harness's CLI (claude, codex), and finds
+// The daemon runs git and each harness's CLI (claude, codex, agy), and finds
 // its folders through these, so a service started by launchd or systemd,
 // which know nothing of the shell's environment, is handed the installing
 // shell's values.

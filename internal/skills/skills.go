@@ -1,13 +1,13 @@
 // Package skills is lichen's skills module: it installs agent skills
 // (SKILL.md directories, the format the Vercel skills CLI popularized)
 // from public git repos and keeps them fresh by polling upstream. The
-// canonical copy of a skill lives in ~/.agents/skills/<name>, and each
-// configured harness sees it through a symlink (default: Claude Code's
-// ~/.claude/skills/<name>), matching the skills CLI's own layout. A skill
-// limited to some harnesses (metadata.lichen-harnesses) lives in lichen's
-// private store instead, since some harnesses read ~/.agents/skills. WHICH
-// repos to sync and which harnesses to link live in this module's own
-// config file (skills.toml in the sync folder). Clones and install
+// canonical copy of a skill lives in the universal ~/.agents/skills/<name>,
+// and each harness that doesn't read that dir sees it through a symlink in
+// its own (Claude Code's ~/.claude/skills/<name>), matching the skills
+// CLI's own layout. A skill limited to some harnesses
+// (metadata.lichen-harnesses) lives in lichen's private store instead,
+// linked from those harnesses' own dirs. WHICH repos to sync lives in this
+// module's own config file (skills.toml in the sync folder). Clones and install
 // bookkeeping stay machine-local. Only skills recorded in the local manifest are ever
 // touched, so skills installed by other means (npx skills, a manual
 // copy) always coexist with lichen's.
@@ -62,8 +62,50 @@ func agentsSkillsDir() (string, error) {
 	return config.HomeJoin(".agents", "skills")
 }
 
-func claudeSkillsDir() (string, error) {
-	return config.HomeJoin(".claude", "skills")
+// harness is an agent tool a skill can be limited to, by name.
+type harness struct {
+	name string
+	dir  []string // its own skills dir, under home
+	// readsUniversal: it reads ~/.agents/skills too, so a skill there
+	// needs no link in its own dir.
+	readsUniversal bool
+}
+
+var harnesses = []harness{
+	{"claude", []string{".claude", "skills"}, false},
+	{"codex", []string{".codex", "skills"}, true},
+	{"antigravity", []string{".gemini", "config", "skills"}, true},
+}
+
+// universal is the lichen-harnesses name for ~/.agents/skills, the dir
+// every tool following the shared layout reads.
+const universal = "universal"
+
+// isUniversal reports whether a skill limited to onlyFor (empty for
+// every harness) has its canonical copy in ~/.agents/skills.
+func isUniversal(onlyFor []string) bool {
+	return len(onlyFor) == 0 || slices.Contains(onlyFor, universal)
+}
+
+// linkDirs is where a skill limited to onlyFor is linked from: the
+// skills dirs of the harnesses it is for, but those that already read
+// its universal copy.
+func linkDirs(onlyFor []string) ([]string, error) {
+	var dirs []string
+	for _, h := range harnesses {
+		if len(onlyFor) > 0 && !slices.Contains(onlyFor, h.name) {
+			continue
+		}
+		if h.readsUniversal && isUniversal(onlyFor) {
+			continue
+		}
+		d, err := config.HomeJoin(h.dir...)
+		if err != nil {
+			return nil, err
+		}
+		dirs = append(dirs, d)
+	}
+	return dirs, nil
 }
 
 // Source selects agent skills to sync from one public git repo, for the
@@ -75,108 +117,52 @@ type Source struct {
 	core.Scope
 }
 
-// skillsConfig is the synced skills config file: Harnesses, then a
-// table per source, keyed by its repo. Harnesses lists the directories
-// that get a per-skill symlink to the canonical copy, in ~/ form (the
-// file travels between machines). Absent means Claude Code's
-// ~/.claude/skills. Hand-edited for now: lichen has no CLI for it.
-type skillsConfig struct {
-	Sources   []Source
-	Harnesses []string
-}
-
-// loadConfig reads the synced skills config. The exists flag lets the
-// caller tell "no file yet" (a fresh machine before its first sync, or
-// a file briefly moved aside) apart from a file that says no sources.
-func loadConfig() (cfg *skillsConfig, exists bool, err error) {
+// loadConfig reads the synced skills config, a table per source keyed
+// by its repo. The exists flag lets the caller tell "no file yet" (a
+// fresh machine before its first sync, or a file briefly moved aside)
+// apart from a file that says no sources.
+func loadConfig() (sources []Source, exists bool, err error) {
 	p, err := ConfigPath()
 	if err != nil {
 		return nil, false, err
 	}
-	cfg = &skillsConfig{}
 	var raw map[string]toml.Primitive
 	exists, err = config.DecodeTOML(p, &raw, func(md toml.MetaData) error {
 		for _, key := range slices.Sorted(maps.Keys(raw)) {
-			var err error
-			if key == "harnesses" {
-				err = md.PrimitiveDecode(raw[key], &cfg.Harnesses)
-			} else {
-				src := Source{Repo: key}
-				if err = md.PrimitiveDecode(raw[key], &src); err == nil {
-					err = src.Check()
-				}
-				cfg.Sources = append(cfg.Sources, src)
+			src := Source{Repo: key}
+			err := md.PrimitiveDecode(raw[key], &src)
+			if err == nil {
+				err = src.Check()
 			}
 			if err != nil {
 				return fmt.Errorf("%s: %w", key, err)
 			}
+			sources = append(sources, src)
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, exists, err
 	}
-	return cfg, exists, nil
-}
-
-// file lays the config out as skills.toml does.
-func (c *skillsConfig) file() map[string]any {
-	f := map[string]any{}
-	if len(c.Harnesses) > 0 {
-		f["harnesses"] = c.Harnesses
-	}
-	for _, src := range c.Sources {
-		f[src.Repo] = src
-	}
-	return f
+	return sources, exists, nil
 }
 
 func loadSources() ([]Source, error) {
-	cfg, _, err := loadConfig()
-	if err != nil {
-		return nil, err
-	}
-	return cfg.Sources, nil
+	sources, _, err := loadConfig()
+	return sources, err
 }
 
-// harnessDirs resolves the configured harness link directories to
-// absolute paths, defaulting to Claude Code's. Unresolvable entries are
-// logged and dropped rather than failing the pass.
-func (c *skillsConfig) harnessDirs(lg *log.Logger) []string {
-	entries := c.Harnesses
-	if len(entries) == 0 {
-		if d, err := claudeSkillsDir(); err == nil {
-			return []string{d}
-		}
-		return nil
-	}
-	var dirs []string
-	for _, e := range entries {
-		d, err := config.ExpandHome(e)
-		if err != nil || !filepath.IsAbs(d) {
-			lg.Printf("skills: ignoring harness dir %q (not an absolute or ~/ path)", e)
-			continue
-		}
-		d = filepath.Clean(d)
-		if !slices.Contains(dirs, d) {
-			dirs = append(dirs, d)
-		}
-	}
-	return dirs
-}
-
-// saveSources rewrites the sources in skills.toml.
+// saveSources rewrites skills.toml.
 func saveSources(sources []Source) error {
-	cfg, _, err := loadConfig()
-	if err != nil {
-		return err
-	}
-	cfg.Sources = sources
 	p, err := ConfigPath()
 	if err != nil {
 		return err
 	}
-	return config.WriteTOML(p, cfg.file())
+	f := map[string]any{}
+	for _, src := range sources {
+		f[src.Repo] = src
+	}
+	return config.WriteTOML(p, f)
 }
 
 // The manifest records what THIS machine has installed and from where.
@@ -311,7 +297,7 @@ func sanitizeName(s string) string {
 }
 
 // skillMeta is what lichen reads from SKILL.md's YAML frontmatter.
-// OnlyFor empty means every configured harness.
+// OnlyFor empty means every harness.
 type skillMeta struct {
 	name    string
 	onlyFor []string
@@ -355,14 +341,6 @@ func parseFrontmatter(md []byte) skillMeta {
 	slices.Sort(meta.onlyFor)
 	meta.onlyFor = slices.Compact(meta.onlyFor)
 	return meta
-}
-
-// harnessName names a harness link dir for lichen-harnesses: the
-// directory holding its skills dir, minus the leading dot, so
-// ~/.claude/skills is "claude", ~/.codex/skills is "codex" and
-// ~/.config/opencode/skills is "opencode".
-func harnessName(dir string) string {
-	return sanitizeName(filepath.Base(filepath.Dir(dir)))
 }
 
 // discovered is one skill found in a clone.
@@ -583,8 +561,8 @@ func ensureLink(name, canonical, dir string, lg *log.Logger) bool {
 	return true
 }
 
-// syncLinks makes a skill's harness links match the configured dirs:
-// links we maintained in a dir no longer configured are removed (only
+// syncLinks makes a skill's harness links match dirs: links we
+// maintained in a dir no longer listed are removed (only
 // when they still resolve to our canonical copy), missing ones are
 // created. Returns the links now under lichen's management.
 func syncLinks(name, canonical string, prev, dirs []string, lg *log.Logger) []string {
@@ -600,17 +578,6 @@ func syncLinks(name, canonical string, prev, dirs []string, lg *log.Logger) []st
 		}
 	}
 	return links
-}
-
-// linkDirs narrows the configured harness dirs to the ones a skill's
-// lichen-harnesses names (all of them when it names none).
-func linkDirs(dirs, onlyFor []string) []string {
-	if len(onlyFor) == 0 {
-		return dirs
-	}
-	return slices.DeleteFunc(slices.Clone(dirs), func(d string) bool {
-		return !slices.Contains(onlyFor, harnessName(d))
-	})
 }
 
 // uninstall removes a manifest-owned skill's canonical copy and, first,
@@ -640,11 +607,10 @@ func Update(env *core.Env) error {
 
 func run(env *core.Env, force bool) error {
 	lg := env.Log
-	scfg, exists, err := loadConfig()
+	sources, exists, err := loadConfig()
 	if err != nil {
 		return err
 	}
-	sources := scfg.Sources
 	man, err := loadManifest()
 	if err != nil {
 		return err
@@ -659,13 +625,6 @@ func run(env *core.Env, force bool) error {
 		lg.Printf("skills: no skills.toml yet, leaving installed skills alone")
 		return nil
 	}
-	harnesses := scfg.harnessDirs(lg)
-	if len(harnesses) == 0 {
-		// Every configured harness entry was unusable: touching links
-		// now would strip every skill from every harness over a typo.
-		lg.Printf("skills: no usable harness dir, leaving existing links alone")
-	}
-
 	// Fold config entries into one selection per repo (a hand-edited
 	// config may list a repo twice).
 	type selection struct {
@@ -753,15 +712,17 @@ func run(env *core.Env, force bool) error {
 	if err != nil {
 		return err
 	}
-	// ~/.agents/skills holds canonical copies, so it never gets links.
-	linkable := slices.DeleteFunc(slices.Clone(harnesses), func(d string) bool { return d == agents })
 	for _, name := range slices.Sorted(maps.Keys(desired)) {
 		t := desired[name]
-		// Some harnesses (Codex among them) read ~/.agents/skills directly,
-		// so a skill limited to others would still reach them there.
+		// Harnesses that read ~/.agents/skills would still reach a skill
+		// that isn't universal there.
 		store := agents
-		if len(t.onlyFor) > 0 && !slices.Contains(t.onlyFor, harnessName(agents)) {
+		if !isUniversal(t.onlyFor) {
 			store = private
+		}
+		links, err := linkDirs(t.onlyFor)
+		if err != nil {
+			return err
 		}
 		canonical := filepath.Join(store, name)
 		st := man.Skills[name]
@@ -774,10 +735,6 @@ func run(env *core.Env, force bool) error {
 			lg.Printf("skills: NOT installing %s (already at %s via another tool; remove it to let lichen manage it)", name, config.ContractHome(canonical))
 			continue
 		}
-		// A move drops the old links, and only syncLinks can lay new ones.
-		if !owned && st != nil && len(harnesses) == 0 {
-			continue
-		}
 		if !owned || st.Tree != t.tree || st.Repo != t.repo || statErr != nil {
 			if err := os.MkdirAll(store, 0o755); err != nil {
 				return err
@@ -786,13 +743,13 @@ func run(env *core.Env, force bool) error {
 				lg.Printf("skills: installing %s: %v", name, err)
 				continue
 			}
-			var links []string
+			var prev []string
 			if owned {
-				links = st.Links
+				prev = st.Links
 			} else if st != nil {
 				uninstall(st.canonical(agents, name), st.Links)
 			}
-			st = &skillState{Repo: t.repo, Tree: t.tree, Links: links, Dir: canonical, OnlyFor: t.onlyFor}
+			st = &skillState{Repo: t.repo, Tree: t.tree, Links: prev, Dir: canonical, OnlyFor: t.onlyFor}
 			man.Skills[name] = st
 			// Persist each install as it lands: a pass killed between
 			// copy and a single final save would leave the directory on
@@ -804,15 +761,13 @@ func run(env *core.Env, force bool) error {
 			only := ""
 			if len(t.onlyFor) > 0 {
 				only = " (" + strings.Join(t.onlyFor, ", ") + " only)"
-				if len(linkDirs(linkable, t.onlyFor)) == 0 {
-					only += ", but no configured harness matches"
+				if store == private && len(links) == 0 {
+					only += ", but lichen knows none of them"
 				}
 			}
 			lg.Printf("skills: installed %s@%.8s from %s%s", name, t.tree, t.repo, only)
 		}
-		if len(harnesses) > 0 {
-			st.Links = syncLinks(name, canonical, st.Links, linkDirs(linkable, t.onlyFor), lg)
-		}
+		st.Links = syncLinks(name, canonical, st.Links, links, lg)
 	}
 
 	if !skipRemovals {

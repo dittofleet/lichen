@@ -90,31 +90,28 @@ func TestParseFrontmatterOnlyFor(t *testing.T) {
 	}
 }
 
-func TestHarnessName(t *testing.T) {
-	cases := map[string]string{
-		"/Users/u/.claude/skills":          "claude",
-		"/Users/u/.codex/skills":           "codex",
-		"/Users/u/.config/opencode/skills": "opencode",
-		"/Users/u/.agents/skills":          "agents",
-	}
-	for dir, want := range cases {
-		if got := harnessName(dir); got != want {
-			t.Errorf("harnessName(%q) = %q, want %q", dir, got, want)
-		}
-	}
-}
-
 func TestLinkDirs(t *testing.T) {
-	claude, codex := "/h/.claude/skills", "/h/.codex/skills"
-	dirs := []string{claude, codex}
-	if got := linkDirs(dirs, nil); !slices.Equal(got, dirs) {
-		t.Errorf("unrestricted: %v", got)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	claude := filepath.Join(home, ".claude", "skills")
+	codex := filepath.Join(home, ".codex", "skills")
+	gemini := filepath.Join(home, ".gemini", "config", "skills")
+	cases := []struct {
+		onlyFor, want []string
+	}{
+		// Codex and Antigravity read the universal copy themselves.
+		{nil, []string{claude}},
+		{[]string{"universal"}, nil},
+		{[]string{"codex", "universal"}, nil},
+		{[]string{"claude"}, []string{claude}},
+		{[]string{"antigravity", "codex"}, []string{codex, gemini}},
+		{[]string{"cursor"}, nil},
 	}
-	if got := linkDirs(dirs, []string{"claude"}); !slices.Equal(got, []string{claude}) {
-		t.Errorf("claude only: %v", got)
-	}
-	if got := linkDirs(dirs, []string{"cursor"}); len(got) != 0 {
-		t.Errorf("unconfigured harness: %v", got)
+	for _, c := range cases {
+		if got, err := linkDirs(c.onlyFor); err != nil || !slices.Equal(got, c.want) {
+			t.Errorf("linkDirs(%v) = %v, %v, want %v", c.onlyFor, got, err, c.want)
+		}
 	}
 }
 
@@ -227,7 +224,7 @@ func TestRun(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	writeConfig("harnesses = [\"~/.claude/skills\", \"~/.codex/skills\"]\n[\"me/skills\"]\ninclude = [\"all\"]\n")
+	writeConfig("[\"me/skills\"]\ninclude = [\"all\"]\n")
 	quiet := log.New(io.Discard, "", 0)
 	pass := func() {
 		t.Helper()
@@ -255,19 +252,28 @@ func TestRun(t *testing.T) {
 		t.Error("claude link to the private copy missing")
 	}
 	expect(filepath.Join(codex, "only"), false)
-	expect(filepath.Join(codex, "both"), true)
+	// Codex reads the universal copy itself.
+	expect(filepath.Join(codex, "both"), false)
+	if !linksTo(filepath.Join(claude, "both"), filepath.Join(agents, "both")) {
+		t.Error("claude link to the universal copy missing")
+	}
 
-	// Dropping the limit moves it to the shared store and links it everywhere.
+	// Dropping the limit moves it to the universal store.
 	skill("only", "")
 	git(upstream, "commit", "-qam", "unlimit")
 	pass()
 	expect(filepath.Join(private, "only"), false)
 	expect(filepath.Join(agents, "only"), true)
-	for _, d := range []string{claude, codex} {
-		if !linksTo(filepath.Join(d, "only"), filepath.Join(agents, "only")) {
-			t.Errorf("%s link to the shared copy missing", d)
-		}
+	if !linksTo(filepath.Join(claude, "only"), filepath.Join(agents, "only")) {
+		t.Error("claude link to the universal copy missing")
 	}
+
+	// Universal alone leaves out Claude Code, which doesn't read it.
+	skill("only", "metadata:\n  lichen-harnesses: universal\n")
+	git(upstream, "commit", "-qam", "universal")
+	pass()
+	expect(filepath.Join(agents, "only"), true)
+	expect(filepath.Join(claude, "only"), false)
 
 	// And limiting it again moves it back.
 	skill("only", "metadata:\n  lichen-harnesses: codex\n")
@@ -298,7 +304,7 @@ func TestRun(t *testing.T) {
 		t.Error("claude link to the private copy missing")
 	}
 
-	// Naming only harnesses this machine lacks leaves it linked nowhere.
+	// Naming only harnesses lichen doesn't know leaves it linked nowhere.
 	skill("only", "metadata:\n  lichen-harnesses: cursor\n")
 	git(upstream, "commit", "-qam", "elsewhere")
 	pass()
@@ -307,7 +313,7 @@ func TestRun(t *testing.T) {
 	expect(filepath.Join(agents, "only"), false)
 
 	// Removal cleans up the private copy and its link.
-	writeConfig("harnesses = [\"~/.claude/skills\", \"~/.codex/skills\"]\n[\"me/skills\"]\nskills = [\"both\"]\ninclude = [\"mac\"]\n")
+	writeConfig("[\"me/skills\"]\nskills = [\"both\"]\ninclude = [\"mac\"]\n")
 	pass()
 	expect(filepath.Join(private, "only"), false)
 	expect(filepath.Join(codex, "only"), false)
@@ -354,7 +360,7 @@ func TestRun(t *testing.T) {
 
 	// An entry this build can't parse holds removals back, but not one
 	// for other devices.
-	writeConfig("harnesses = [\"~/.claude/skills\", \"~/.codex/skills\"]\n[\"me/skills\"]\ninclude = [\"linux\"]\n[\"not a spec\"]\ninclude = [\"linux\"]\n")
+	writeConfig("[\"me/skills\"]\ninclude = [\"linux\"]\n[\"not a spec\"]\ninclude = [\"linux\"]\n")
 	pass()
 	expect(filepath.Join(agents, "both"), false)
 }

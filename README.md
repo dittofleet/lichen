@@ -11,7 +11,7 @@ It syncs things, one module per kind of thing:
   under your home directory, written wherever each device needs it.
 - **skills**: agent skills installed from public repos, kept up to date
   by polling.
-- **mcp**: MCP servers, installed into Claude Code and Codex.
+- **mcp**: MCP servers, installed into Claude Code, Codex and Antigravity.
 
 lichen is a pun on 'liken' and just how lichen behaves in general.
 
@@ -240,20 +240,14 @@ lichen skills add vercel-labs/agent-skills --skill frontend-design
 lichen skills add owner/single-skill-repo
 ```
 
-The canonical copy lands in `~/.agents/skills/<name>` with a relative
-symlink from `~/.claude/skills/<name>` (a junction on Windows), the same
-layout `npx skills` creates, so Claude Code picks the skill up globally and both tools
-coexist: lichen never touches a skill it didn't install. Other harnesses
-get links too by listing their skill directories in the skills config:
-
-```toml
-harnesses = ["~/.claude/skills", "~/.codex/skills"]
-```
+The canonical copy lands in `~/.agents/skills/<name>`, the universal
+skills dir that Codex and Antigravity read, with a relative symlink from
+`~/.claude/skills/<name>` (a junction on Windows) for Claude Code. It is
+the same layout `npx skills` creates, so both tools coexist: lichen never
+touches a skill it didn't install.
 
 A skill can limit itself to some harnesses with a comma-separated
-`lichen-harnesses` under `metadata` in its `SKILL.md` frontmatter. A
-harness is named after the directory holding its skills dir, so
-`~/.claude/skills` is `claude` and `~/.codex/skills` is `codex`:
+`lichen-harnesses` under `metadata` in its `SKILL.md` frontmatter:
 
 ```yaml
 ---
@@ -264,10 +258,17 @@ metadata:
 ---
 ```
 
-Some harnesses (Codex among them) read `~/.agents/skills` directly, so a
-limited skill's canonical copy lives in `~/.local/share/lichen/skills`
-instead, reachable only through the listed harnesses' links. List
-`agents` to keep it in `~/.agents/skills`.
+| Name          | Skills dir                |
+| ------------- | ------------------------- |
+| `claude`      | `~/.claude/skills`        |
+| `codex`       | `~/.codex/skills`         |
+| `antigravity` | `~/.gemini/config/skills` |
+| `universal`   | `~/.agents/skills`        |
+
+A skill that isn't `universal` keeps its canonical copy in
+`~/.local/share/lichen/skills` instead, reachable only through links from
+the listed harnesses' own dirs. Codex and Antigravity read a `universal`
+skill where it is, so only Claude Code needs a link to it.
 
 The list of skill repos lives in `~/lichen/skills.toml`, so a skill
 installs on every device in its scope, and removing one uninstalls it
@@ -286,8 +287,8 @@ lichen skills exclude owner/mac-skills servers   # change it later
 
 ## MCP servers
 
-The mcp module installs MCP servers into Claude Code and Codex, from a
-command to launch or a URL to reach:
+The mcp module installs MCP servers into Claude Code, Codex and
+Antigravity, from a command to launch or a URL to reach:
 
 ```sh
 lichen mcp add playwright bunx @playwright/mcp@latest
@@ -296,9 +297,9 @@ lichen mcp remove context7
 lichen mcp list
 ```
 
-Servers go in at user scope through each harness's own CLI (`claude mcp`
-and `codex mcp`), and a harness that isn't installed on a machine is
-skipped. lichen never touches a server it didn't add, so a name you
+Servers go in at user scope through each harness's own CLI (`claude mcp`,
+`codex mcp` and `agy mcp`), and a harness that isn't installed on a
+machine is skipped. lichen never touches a server it didn't add, so a name you
 already use in a harness is left alone there. A lichen server deleted by
 hand comes back on the next pass, so remove it with `lichen mcp remove`
 instead. Running sessions pick up changes after a restart.
