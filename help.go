@@ -75,7 +75,7 @@ var help = []helpSection{
 		{
 			name:    "mcp",
 			usage:   "mcp <command>",
-			summary: "Sync MCP servers into Claude Code and Codex",
+			summary: "Sync MCP servers into Claude Code, Codex and Antigravity",
 			about: "Installed at user scope through each harness's CLI. Missing harnesses are " +
 				"skipped. Running sessions need a restart to see changes.",
 			subs: []helpSub{
