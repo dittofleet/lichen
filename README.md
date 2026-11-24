@@ -233,56 +233,54 @@ backups = true
 
 The skills module installs agent skills (`SKILL.md` directories, the
 format the [Vercel skills CLI](https://github.com/vercel-labs/skills)
-uses) from public repos:
+uses) from public repos, into the harnesses you name:
 
 ```sh
-lichen skills add vercel-labs/agent-skills --skill frontend-design
-lichen skills add owner/single-skill-repo
+lichen skills add vercel-labs/agent-skills --skill frontend-design --harness claude
+lichen skills add owner/single-skill-repo --harness claude,codex,antigravity
 ```
 
-The canonical copy lands in `~/.agents/skills/<name>`, the universal
-skills dir that Codex and Antigravity read, with a relative symlink from
-`~/.claude/skills/<name>` (a junction on Windows) for Claude Code. It is
-the same layout `npx skills` creates, so both tools coexist: lichen never
-touches a skill it didn't install.
+Nothing goes into a harness that isn't named, so a new repo needs
+`--harness`. Each harness gets the skill in its own skills dir:
 
-A skill can limit itself to some harnesses with a comma-separated
-`lichen-harnesses` under `metadata` in its `SKILL.md` frontmatter:
-
-```yaml
----
-name: my-skill
-description: ...
-metadata:
-  lichen-harnesses: claude, codex
----
-```
-
-| Name          | Skills dir                |
+| Harness       | Skills dir                |
 | ------------- | ------------------------- |
 | `claude`      | `~/.claude/skills`        |
 | `codex`       | `~/.codex/skills`         |
 | `antigravity` | `~/.gemini/config/skills` |
 | `universal`   | `~/.agents/skills`        |
 
-A skill that isn't `universal` keeps its canonical copy in
-`~/.local/share/lichen/skills` instead, reachable only through links from
-the listed harnesses' own dirs. Codex and Antigravity read a `universal`
-skill where it is, so only Claude Code needs a link to it.
+The skill there is a relative symlink (a junction on Windows) to one
+canonical copy in `~/.local/share/lichen/skills/<name>`. lichen never
+touches a skill it didn't install.
+
+`universal` is the shared dir that Codex, Antigravity and other tools
+read directly. A repo that names it keeps its canonical copies there
+instead, which Codex and Antigravity need no link to. Claude Code doesn't
+read it, so name `claude` too for it to get one.
 
 The list of skill repos lives in `~/lichen/skills.toml`, so a skill
 installs on every device in its scope, and removing one uninstalls it
-everywhere. The
-daemon polls each repo about hourly, and a repo moving only reinstalls
-the skills whose content actually changed. `lichen skills update` checks
-immediately.
+everywhere:
+
+```toml
+["github.com/owner/single-skill-repo"]
+harnesses = ["claude", "codex", "antigravity"]
+include = ["mac"]
+```
+
+The daemon polls each repo about hourly, and a repo moving only
+reinstalls the skills whose content actually changed. `lichen skills
+update` checks immediately.
 
 A repo's skills go where it is [scoped](#which-devices-get-what), and
-adding a repo again adds the device it is added on:
+adding a repo again adds the device it is added on and the harnesses it
+names. Every skill from a repo goes to the same devices and harnesses:
 
 ```sh
-lichen skills add owner/mac-skills --include mac
-lichen skills exclude owner/mac-skills servers   # change it later
+lichen skills add owner/mac-skills --harness claude --include mac
+lichen skills exclude owner/mac-skills servers         # change it later
+lichen skills harness owner/mac-skills claude codex    # or where it goes
 ```
 
 ## MCP servers

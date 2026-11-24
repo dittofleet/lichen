@@ -312,8 +312,8 @@ func cmdUninstall(args []string) error {
 	})
 }
 
-// removeState removes lichen's local state, except harness-limited
-// skills, which live in there and stay installed like the ones in
+// removeState removes lichen's local state, except the skills that live
+// in there, which stay installed like the universal ones in
 // ~/.agents/skills.
 func removeState(dir string) error {
 	keep, _ := skills.PrivateDir()

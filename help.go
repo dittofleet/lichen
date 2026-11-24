@@ -60,14 +60,16 @@ var help = []helpSection{
 			name:    "skills",
 			usage:   "skills <command>",
 			summary: "Sync agent skills from public repos",
-			about: "Installed to ~/.agents/skills and linked from ~/.claude/skills. Repos are " +
-				"checked for updates hourly.",
+			about: "Linked into the skills dirs of the harnesses a repo names: claude, codex, " +
+				"antigravity, or universal (~/.agents/skills). Repos are checked for updates hourly.",
 			subs: []helpSub{
-				{"add", "skills add <repo> [--skill <name>]... [--include <devices,groups> [--exclude <devices,groups>]]", "Sync skills from a public repo",
-					"All skills in the repo, or the ones named with --skill. For this device only, unless --include names others."},
+				{"add", "skills add <repo> --harness <harnesses> [--skill <name>]... [--include <devices,groups> [--exclude <devices,groups>]]", "Sync skills from a public repo",
+					"All skills in the repo, or the ones named with --skill. For this device only, unless --include names others. " +
+						"A repo already synced keeps its harnesses without --harness, and gains the ones it names."},
 				{"remove", "skills remove <repo|skill>...", "Stop syncing and uninstall", ""},
 				{"include", "skills include <repo> <device|group>...", "Install a repo's skills on these devices too", ""},
 				{"exclude", "skills exclude <repo> <device|group>...", "Uninstall a repo's skills from these devices", ""},
+				{"harness", "skills harness <repo> <harness>...", "Change the harnesses a repo's skills go into", ""},
 				{"list", "skills list", "List synced skills", ""},
 				{"update", "skills update", "Check repos for updates now", ""},
 			},
