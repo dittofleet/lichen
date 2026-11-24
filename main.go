@@ -175,18 +175,43 @@ func cmdScope(module string, args []string, set func(env *core.Env, thing string
 	return nil
 }
 
+// commaList splits the comma-separated names a flag takes.
+func commaList(list string) []string {
+	var names []string
+	for _, n := range strings.Split(list, ",") {
+		if n = strings.TrimSpace(n); n != "" {
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
+// cmdHarness runs a module's harness command: `<thing> <harness>...`
+// sets the harnesses the thing goes into.
+func cmdHarness(module string, args []string, set func(thing string, harnesses []string) ([]string, error)) error {
+	if len(args) < 2 {
+		return usage(module, "harness")
+	}
+	thing, harnesses := args[0], args[1:]
+	err := change(module+": harness "+thing, func(*core.Env) (err error) {
+		harnesses, err = set(thing, harnesses)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s now goes into %s\n", thing, strings.Join(harnesses, ", "))
+	return nil
+}
+
 // scopeFlag adds to scope from --include or --exclude and a comma list
 // of devices and groups.
 func scopeFlag(scope *core.Scope, flag, list string) error {
-	var names []string
-	for _, n := range strings.Split(list, ",") {
-		if n = strings.TrimSpace(n); n == "" {
-			continue
-		}
+	names := commaList(list)
+	for _, n := range names {
 		if err := core.ValidGroup(n); err != nil {
 			return err
 		}
-		names = append(names, n)
 	}
 	if flag == "--include" {
 		scope.Include = append(scope.Include, names...)

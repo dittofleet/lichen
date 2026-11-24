@@ -282,6 +282,18 @@ func PickHarnesses(all, names []string) ([]string, error) {
 	return slices.DeleteFunc(slices.Clone(all), func(n string) bool { return !slices.Contains(names, n) }), nil
 }
 
+// AddingHarnesses is the harnesses something gets when it is added
+// naming these, having had old (none, for something new): both, as
+// PickHarnesses returns them. It has to end up with some, so nothing
+// goes into a harness it wasn't asked to.
+func AddingHarnesses(all, old, named []string, what string) ([]string, error) {
+	harnesses, err := PickHarnesses(all, append(slices.Clone(old), named...))
+	if err == nil && len(harnesses) == 0 {
+		err = fmt.Errorf("name the harnesses %s goes into with --harness (%s)", what, strings.Join(all, ", "))
+	}
+	return harnesses, err
+}
+
 // ValidGroup reports whether a name can be a device group (or device).
 func ValidGroup(name string) error {
 	if !groupName.MatchString(name) {

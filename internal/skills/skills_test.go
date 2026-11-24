@@ -93,16 +93,6 @@ func TestLinkDirs(t *testing.T) {
 	}
 }
 
-func TestNormalizeHarnesses(t *testing.T) {
-	got, err := normalizeHarnesses([]string{"universal", "codex", "claude", "codex"})
-	if err != nil || !slices.Equal(got, []string{"claude", "codex", "universal"}) {
-		t.Errorf("normalizeHarnesses = %v, %v", got, err)
-	}
-	if _, err := normalizeHarnesses([]string{"claude", "cursor"}); err == nil {
-		t.Error("an unknown harness passed")
-	}
-}
-
 func TestSanitizeName(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"My Skill", "my-skill"},

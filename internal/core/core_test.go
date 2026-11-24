@@ -82,3 +82,21 @@ func TestDescribe(t *testing.T) {
 		}
 	}
 }
+
+func TestHarnesses(t *testing.T) {
+	all := []string{"claude", "codex", "universal"}
+	got, err := PickHarnesses(all, []string{"universal", "codex", "claude", "codex"})
+	if err != nil || !slices.Equal(got, all) {
+		t.Errorf("PickHarnesses = %v, %v", got, err)
+	}
+	if _, err := PickHarnesses(all, []string{"claude", "cursor"}); err == nil {
+		t.Error("an unknown harness passed")
+	}
+	got, err = AddingHarnesses(all, []string{"codex"}, []string{"claude"}, "x")
+	if err != nil || !slices.Equal(got, []string{"claude", "codex"}) {
+		t.Errorf("AddingHarnesses = %v, %v", got, err)
+	}
+	if _, err := AddingHarnesses(all, nil, nil, "x"); err == nil {
+		t.Error("adding with no harnesses passed")
+	}
+}

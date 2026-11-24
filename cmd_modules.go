@@ -24,7 +24,7 @@ func cmdSkills(args []string) error {
 			return skills.SetScope(repo, edit)
 		})
 	case "harness":
-		return cmdSkillsHarness(args[1:])
+		return cmdHarness("skills", args[1:], skills.SetHarnesses)
 	case "update":
 		return cmdSkillsUpdate()
 	case "list", "ls":
@@ -51,7 +51,7 @@ func cmdSkillsAdd(args []string) error {
 			if i++; i >= len(args) {
 				return fmt.Errorf("--harness needs harnesses (%s)", strings.Join(skills.HarnessNames(), ", "))
 			}
-			harnesses = append(harnesses, harnessFlag(args[i])...)
+			harnesses = append(harnesses, commaList(args[i])...)
 		case args[i] == "--include" || args[i] == "--exclude":
 			if i++; i >= len(args) {
 				return fmt.Errorf("%s needs devices or groups", args[i-1])
@@ -102,31 +102,6 @@ func cmdSkillsAdd(args []string) error {
 		return nil
 	}
 	fmt.Printf("syncing %d skill(s) from %s into %s: %s\n", len(mine), src.Repo, strings.Join(src.Harnesses, ", "), strings.Join(mine, ", "))
-	return nil
-}
-
-// harnessFlag splits the comma-separated harnesses --harness takes.
-func harnessFlag(list string) []string {
-	var names []string
-	for _, h := range strings.Split(list, ",") {
-		names = append(names, strings.TrimSpace(h))
-	}
-	return names
-}
-
-func cmdSkillsHarness(args []string) error {
-	if len(args) < 2 {
-		return usage("skills", "harness")
-	}
-	repo, harnesses := args[0], args[1:]
-	err := change("skills: harness "+repo, func(*core.Env) (err error) {
-		harnesses, err = skills.SetHarnesses(repo, harnesses)
-		return err
-	})
-	if err != nil {
-		return err
-	}
-	fmt.Printf("%s now goes into %s\n", repo, strings.Join(harnesses, ", "))
 	return nil
 }
 
@@ -217,7 +192,7 @@ func cmdMCP(args []string) error {
 			return mcp.SetScope(name, edit)
 		})
 	case "harness":
-		return cmdMCPHarness(args[1:])
+		return cmdHarness("mcp", args[1:], mcp.SetHarnesses)
 	case "list", "ls":
 		return cmdMCPList()
 	}
@@ -238,7 +213,7 @@ func cmdMCPAdd(args []string) error {
 	var harnesses []string
 	for len(rest) > 1 && (rest[0] == "--include" || rest[0] == "--exclude" || rest[0] == "--harness") {
 		if rest[0] == "--harness" {
-			harnesses = append(harnesses, harnessFlag(rest[1])...)
+			harnesses = append(harnesses, commaList(rest[1])...)
 		} else if err := scopeFlag(&scope, rest[0], rest[1]); err != nil {
 			return err
 		}
@@ -290,22 +265,6 @@ func cmdMCPAdd(args []string) error {
 		}
 		fmt.Printf("syncing %s, installed in %s (restart running sessions to pick it up)\n", name, strings.Join(e.Harnesses, ", "))
 	}
-	return nil
-}
-
-func cmdMCPHarness(args []string) error {
-	if len(args) < 2 {
-		return usage("mcp", "harness")
-	}
-	name, harnesses := args[0], args[1:]
-	err := change("mcp: harness "+name, func(*core.Env) (err error) {
-		harnesses, err = mcp.SetHarnesses(name, harnesses)
-		return err
-	})
-	if err != nil {
-		return err
-	}
-	fmt.Printf("%s now goes into %s (restart running sessions to pick it up)\n", name, strings.Join(harnesses, ", "))
 	return nil
 }
 
